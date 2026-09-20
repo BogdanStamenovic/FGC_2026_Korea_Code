@@ -10,6 +10,7 @@ Press START: the while loop runs until STOP.
 from ftc.hardware import CRServo, DcMotor, DcMotorSimple, Servo
 from ftc.navigation import AngleUnit
 from ftc.opmode import LinearOpMode, TeleOp
+from ftc.util import ElapsedTime
 # ── pyftc:imports:end ──
 
 @TeleOp(name="Main", group="pyftc")
@@ -28,7 +29,7 @@ class Main(LinearOpMode):
     shooter_intake: CRServo
     fixator_release: Servo
     # ── pyftc:devices:end ──
-
+    
     def runOpMode(self) -> None:
         # ── On ready: runs once when INIT is pressed ──
         # ── pyftc:init ──
@@ -44,16 +45,16 @@ class Main(LinearOpMode):
         self.chain_stop = self.hardwareMap.get(Servo, "ChainStop")
         self.shooter_intake = self.hardwareMap.get(CRServo, "ShooterIntake")
         self.fixator_release = self.hardwareMap.get(Servo, "FixatorRelease")
-        chain_drop_position = 0.5  # servo jumps here on START; set your starting position
-        chain_stop_position = 0.5  # servo jumps here on START; set your starting position
-        fixator_release_position = 0.5  # servo jumps here on START; set your starting position
-        # ── pyftc:init:end ──
 
+        # ── pyftc:init:end ──
         self.telemetry.addLine("Ready. Press START.")
         self.telemetry.update()
         self.waitForStart()
         self.rf.setDirection(DcMotorSimple.Direction.REVERSE)
         self.lb.setDirection(DcMotorSimple.Direction.REVERSE)
+        timer = ElapsedTime()
+        timer.reset()
+        cyclePhase=[0, timer.milliseconds()]#[0 -- OFF; 1 -- SPINNING UP; 2 -- SHOOTING, timer.milliseconds() -- last time the phase changed]
         # ── On start: loops until STOP is pressed ──
         while self.opModeIsActive():
             #OmniWheelMovement
@@ -62,7 +63,23 @@ class Main(LinearOpMode):
             self.lb.setPower(self.gamepad1.right_stick_y-self.gamepad1.right_stick_x)
             self.rb.setPower(self.gamepad1.right_stick_y+self.gamepad1.right_stick_x)
             
+            #Shooter and shootker intake
             
+            if cyclePhase[0]==0 and cyclePhase[1]+500 < timer.milliseconds() and self.gamepad1.cross:  
+                self.shooter.setPower(1)
+                cyclePhase = [1, timer.milliseconds()]
+                self.telemetry.addData("MagDump", "Shooter spinning up")
+
+            elif cyclePhase[0]==1 and cyclePhase[1]+500 < timer.milliseconds() and self.gamepad1.cross:  
+                self.shooter_intake.setPower(1)
+                cyclePhase= [2, timer.milliseconds()]
+                self.telemetry.addData("MagDump", "Shooter shooting")
+
+            elif cyclePhase[0]==2 and cyclePhase[1]+500 < timer.milliseconds() and self.gamepad1.cross:
+                self.shooter.setPower(0)
+                self.shooter_intake.setPower(0)
+                cyclePhase= [0, timer.milliseconds()]
+                self.telemetry.addData("MagDump", "Shooter off")
             #telemetry
             self.telemetry.update()
             
