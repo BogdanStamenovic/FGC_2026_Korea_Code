@@ -7,11 +7,26 @@ Press START: the while loop runs until STOP.
 # ── pyftc:config name="FGC2026-Incheon" fingerprint="c841abeba9d5c0ab" generated="2026-09-20" ──
 
 # ── pyftc:imports ──
+from typing import Any
+
+
 from ftc.hardware import CRServo, DcMotor, DcMotorSimple, Servo
 from ftc.navigation import AngleUnit
 from ftc.opmode import LinearOpMode, TeleOp
 from ftc.util import ElapsedTime
 # ── pyftc:imports:end ──
+
+class Cycle:
+    """One button-driven phase counter: press cycles phase 0..count and wraps."""
+    count: int
+    phase: int
+    last_ms: float
+
+    def __init__(self, count: int, last_ms: float) -> None:
+        self.count = count
+        self.phase = 0
+        self.last_ms = last_ms
+
 
 @TeleOp(name="Main", group="pyftc")
 class Main(LinearOpMode):
@@ -29,7 +44,27 @@ class Main(LinearOpMode):
     shooter_intake: CRServo
     fixator_release: Servo
     # ── pyftc:devices:end ──
-    
+    cycle_register: dict[str, Cycle] = {}
+    cycle_List: list[str] = []
+    timer: ElapsedTime = ElapsedTime()
+    DEBOUNCE_MS: float = 500.0   # minimum time between two phase changes
+    def register_cyclePhase(self, name: str, count: int) -> None:
+        self.cycle_register[name] = Cycle(count-1, self.timer.milliseconds())
+        self.cycle_List.append(name)
+
+    def cyclePhase(self, name: str, pressed: bool) -> None:
+        """Advance one cycle. `pressed` must be read fresh every loop: a button
+        passed at registration time would be a copy of its value back then."""
+        cycle = self.cycle_register[name]
+        if pressed and self.timer.milliseconds() - cycle.last_ms > self.DEBOUNCE_MS:
+            if cycle.phase >= cycle.count:
+                cycle.phase = 0
+            else:
+                cycle.phase = cycle.phase + 1
+            cycle.last_ms = self.timer.milliseconds()
+
+    def phase_of(self, name: str) -> int:
+        return self.cycle_register[name].phase
     def runOpMode(self) -> None:
         # ── On ready: runs once when INIT is pressed ──
         # ── pyftc:init ──
@@ -52,9 +87,11 @@ class Main(LinearOpMode):
         self.waitForStart()
         self.rf.setDirection(DcMotorSimple.Direction.REVERSE)
         self.lb.setDirection(DcMotorSimple.Direction.REVERSE)
-        timer = ElapsedTime()
-        timer.reset()
-        cyclePhase=[0, timer.milliseconds()]#[0 -- OFF; 1 -- SPINNING UP; 2 -- SHOOTING, timer.milliseconds() -- last time the phase changed]
+        # phases: 0 -- OFF; 1 -- SPINNING UP; 2 -- SHOOTING
+        self.register_cyclePhase(name="MagDump", count=3)
+        self.register_cyclePhase(name="BallPickup", count=2)
+        self.timer.reset()
+        
         # ── On start: loops until STOP is pressed ──
         while self.opModeIsActive():
             #OmniWheelMovement
@@ -64,22 +101,28 @@ class Main(LinearOpMode):
             self.rb.setPower(self.gamepad1.right_stick_y+self.gamepad1.right_stick_x)
             
             #Shooter and shootker intake
-            
-            if cyclePhase[0]==0 and cyclePhase[1]+500 < timer.milliseconds() and self.gamepad1.cross:  
+            MagDump: int = self.phase_of("MagDump")
+            if MagDump==1:  
                 self.shooter.setPower(1)
-                cyclePhase = [1, timer.milliseconds()]
                 self.telemetry.addData("MagDump", "Shooter spinning up")
 
-            elif cyclePhase[0]==1 and cyclePhase[1]+500 < timer.milliseconds() and self.gamepad1.cross:  
+            elif MagDump==2:  
                 self.shooter_intake.setPower(1)
-                cyclePhase= [2, timer.milliseconds()]
                 self.telemetry.addData("MagDump", "Shooter shooting")
 
-            elif cyclePhase[0]==2 and cyclePhase[1]+500 < timer.milliseconds() and self.gamepad1.cross:
+            else:
                 self.shooter.setPower(0)
                 self.shooter_intake.setPower(0)
-                cyclePhase= [0, timer.milliseconds()]
                 self.telemetry.addData("MagDump", "Shooter off")
+            #BallPickup
+            BallPickup=self.phase_of(name="BallPickup")
+            if BallPickup==1:
+                self.collector.setPower(1)
+            else:
+                self.collector.setPower(0)
+            #cyclePhase
+            self.cyclePhase("MagDump", self.gamepad1.cross)
+            self.cyclePhase("BallPickup", self.gamepad1.circle)
             #telemetry
             self.telemetry.update()
             
