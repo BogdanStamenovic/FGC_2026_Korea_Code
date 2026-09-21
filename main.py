@@ -42,7 +42,6 @@ class Main(LinearOpMode):
     rf: DcMotor
     chain_drop: Servo
     chain_stop: Servo
-    shooter_intake: CRServo
     fixator_release: Servo
     # ── pyftc:devices:end ──
     
@@ -75,12 +74,18 @@ class Main(LinearOpMode):
             return False
         else:
             return True
-        
+    #Defining collector/shooterintake
+    def BallCollector(self) -> DcMotor:
+        self.tobesplit.setDirection(DcMotorSimple.Direction.FORWARD)
+        return self.tobesplit
+    def shooter_intake(self) -> DcMotor:
+        self.tobesplit.setDirection(DcMotorSimple.Direction.REVERSE)
+        return self.tobesplit
     #Op Modes
     def runOpMode(self) -> None:
         # ── On ready: runs once when INIT is pressed ──
+        self.tobesplit = self.hardwareMap.get(DcMotor, "Collector")#Split between to modes collector and intake
         # ── pyftc:init ──
-        self.collector = self.hardwareMap.get(DcMotor, "Collector")
         self.shooter = self.hardwareMap.get(DcMotor, "shooter")
         self.climber = self.hardwareMap.get(DcMotor, "Climber")
         self.fishing = self.hardwareMap.get(DcMotor, "Fishing")
@@ -90,7 +95,6 @@ class Main(LinearOpMode):
         self.rf = self.hardwareMap.get(DcMotor, "RF")
         self.chain_drop = self.hardwareMap.get(Servo, "chainDrop")
         self.chain_stop = self.hardwareMap.get(Servo, "ChainStop")
-        self.shooter_intake = self.hardwareMap.get(CRServo, "ShooterIntake")
         self.fixator_release = self.hardwareMap.get(Servo, "FixatorRelease")
 
         # ── pyftc:init:end ──
@@ -102,7 +106,7 @@ class Main(LinearOpMode):
         self.register_cyclePhase(name="MagDump", count=3)
         self.register_cyclePhase(name="BallPickup", count=2)
         self.register_cyclePhase(name="DriveDirection", count=2)
-        self.register_cyclePhase(name="ClimbDirection", count=3)
+        self.register_cyclePhase(name="ClimbDirection", count=2)
         self.timer.reset()
 
         #Fishing
@@ -114,6 +118,7 @@ class Main(LinearOpMode):
         self.chain_stop.setPosition(0.7)
         self.EnteredFishing: bool = False
         # ── On start: loops until STOP is pressed ──
+        self.InUse="Free" #Muttually exclusive split
         while self.opModeIsActive():
 
             #DriveDirection
@@ -143,26 +148,28 @@ class Main(LinearOpMode):
             self.rb.setPower(-self.gamepad1.left_stick_x)
             #Shooter and shooter intake
             MagDump: int = self.phase_of("MagDump")
-            if MagDump==1:  
-                self.shooter.setPower(1)
+            if MagDump==1 and self.InUse=="Free":  
+                self.shooter.setPower(0.8)
                 self.telemetry.addData("MagDump", "Shooter spinning up")
-
-            elif MagDump==2:  
-                self.shooter_intake.setPower(1)
+                self.InUse="MagDump"
+            elif MagDump==2 and self.InUse=="MagDump": 
+                self.shooter_intake().setPower(1)
                 self.telemetry.addData("MagDump", "Shooter shooting")
-
-            else:
+            elif MagDump==0 and self.InUse=="MagDump":
+                self.shooter_intake().setPower(0)
                 self.shooter.setPower(0)
-                self.shooter_intake.setPower(0)
                 self.telemetry.addData("MagDump", "Shooter off")
+                self.InUse="Free"
             
             #BallPickup
             BallPickup=self.phase_of(name="BallPickup")
-            if BallPickup==1:
-                self.collector.setPower(1)
-            else:
-                self.collector.setPower(0)
-            
+            if BallPickup==1 and self.InUse=="Free":
+                self.BallCollector().setPower(1)
+                self.InUse="BallPickup"
+            elif BallPickup==0 and self.InUse=="BallPickup":
+                self.BallCollector().setPower(0)
+                self.InUse="Free"
+
             #Fishing
             if self.gamepad1.dpad_down:
                 self.chain_drop.setPosition(0.25)
