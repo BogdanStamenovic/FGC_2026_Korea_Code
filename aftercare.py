@@ -7,8 +7,6 @@ Press START: the while loop runs until STOP.
 # ── pyftc:config name="FGC2026-Incheon" fingerprint="c841abeba9d5c0ab" generated="2026-09-20" ──
 
 # ── pyftc:imports ──
-from typing import Any
-
 from main import Cycle
 from ftc.hardware import CRServo, DcMotor, DcMotorSimple, Servo
 from ftc.navigation import AngleUnit
