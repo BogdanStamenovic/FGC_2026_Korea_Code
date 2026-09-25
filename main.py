@@ -7,7 +7,7 @@ Press START: the while loop runs until STOP.
 # ── pyftc:config name="FGC2026-Incheon" fingerprint="c841abeba9d5c0ab" generated="2026-09-20" ──
 
 # ── pyftc:imports ──
-from ftc.hardware import CRServo, DcMotor, DcMotorControllerEx, DcMotorSimple, Servo
+from ftc.hardware import CRServo, DcMotor, DcMotorControllerEx, DcMotorEx, DcMotorSimple, Servo
 from ftc.navigation import AngleUnit
 from ftc.opmode import LinearOpMode, TeleOp
 from ftc.util import ElapsedTime
@@ -29,8 +29,8 @@ class Cycle:
 @TeleOp(name="Main", group="pyftc")
 class Main(LinearOpMode):
     # ── pyftc:devices ──
-    collector: DcMotor
-    shooter: DcMotor
+    collector: DcMotorEx
+    shooter: DcMotorEx
     climber: DcMotor
     fishing: DcMotor
     lb: DcMotor
@@ -39,7 +39,7 @@ class Main(LinearOpMode):
     rf: DcMotor
     chain_drop: Servo
     chain_stop: Servo
-    fixator_release: Servo
+    fixator_release: CRServo
     ClimbUpper: CRServo
     # ── pyftc:devices:end ──
     
@@ -73,19 +73,19 @@ class Main(LinearOpMode):
         else:
             return True
     #Defining collector/shooterintake
-    def BallCollector(self) -> DcMotor:
+    def BallCollector(self) -> DcMotorEx:
         self.tobesplit.setDirection(DcMotorSimple.Direction.FORWARD)
         return self.tobesplit
-    def shooter_intake(self) -> DcMotor:
+    def shooter_intake(self) -> DcMotorEx:
         self.tobesplit.setDirection(DcMotorSimple.Direction.REVERSE)
         return self.tobesplit
     #Op Modes
     def runOpMode(self) -> None:
         # ── On ready: runs once when INIT is pressed ──
-        self.tobesplit = self.hardwareMap.get(DcMotor, "Collector")#Split between to modes collector and intake
+        self.tobesplit = self.hardwareMap.get(DcMotorEx, "Collector")#Split between to modes collector and intake
         # ── pyftc:init ──
         self.ClimbUpper = self.hardwareMap.get(CRServo, "ClimbUpper")
-        self.shooter = self.hardwareMap.get(DcMotor, "shooter")
+        self.shooter = self.hardwareMap.get(DcMotorEx, "shooter")
         self.climber = self.hardwareMap.get(DcMotor, "Climber")
         self.fishing = self.hardwareMap.get(DcMotor, "Fishing")
         self.lb = self.hardwareMap.get(DcMotor, "LB")
@@ -94,7 +94,7 @@ class Main(LinearOpMode):
         self.rf = self.hardwareMap.get(DcMotor, "RF")
         self.chain_drop = self.hardwareMap.get(Servo, "chainDrop")
         self.chain_stop = self.hardwareMap.get(Servo, "ChainStop")
-        self.fixator_release = self.hardwareMap.get(Servo, "FixatorRelease")
+        self.fixator_release = self.hardwareMap.get(CRServo, "FixatorRelease")
 
         # ── pyftc:init:end ──
         self.telemetry.addLine("Ready. Press START.")
@@ -113,7 +113,6 @@ class Main(LinearOpMode):
         self.register_cyclePhase(name="ClimbDirection", count=2)
         self.register_cyclePhase(name="ClimbScaffold", count=2)
         self.timer.reset()
-
         #Fishing
         self.fishing.setDirection(DcMotorSimple.Direction.REVERSE)
         self.fishing.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
@@ -124,6 +123,11 @@ class Main(LinearOpMode):
         self.EnteredFishing: bool = False
         # ── On start: loops until STOP is pressed ──
         self.InUse="Free" #Muttually exclusive split
+        self.started=False
+        self.prime_velocity=0.0
+        self.last_start=False
+        # -- DidUseFixator?
+        self.DidUseFixator=False
         while self.opModeIsActive():
 
             #OmniWheelMovement
@@ -136,22 +140,45 @@ class Main(LinearOpMode):
             self.rf.setPower(self.gamepad1.left_stick_x)
             self.lb.setPower(self.gamepad1.left_stick_x)
             self.rb.setPower(-self.gamepad1.left_stick_x)
-
+            velocity = self.shooter.getVelocity()
+            self.telemetry.addData("Prime Velocity", velocity)
             #Shooter and shooter intake
             MagDump: int = self.phase_of("MagDump")
             if MagDump==1 and self.InUse=="Free":  
+                self.shooter_intake().setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
                 self.shooter.setPower(1)
                 self.telemetry.addData("MagDump", "Shooter spinning up")
                 self.InUse="MagDump"
             elif MagDump==2 and self.InUse=="MagDump": 
-                self.shooter_intake().setPower(1)
+                self.started = True
                 self.telemetry.addData("MagDump", "Shooter shooting")
             elif MagDump==0 and self.InUse=="MagDump":
+                self.shooter_intake().setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT)
                 self.shooter_intake().setPower(0)
                 self.shooter.setPower(0)
+                self.started=False
                 self.telemetry.addData("MagDump", "Shooter off")
                 self.InUse="Free"
-            
+            #Get real primevel
+            if self.last_start != self.started:
+                self.prime_velocity = velocity
+            self.last_start = self.started
+
+
+            if self.started:
+                self.telemetry.addData("PrimeVel", self.prime_velocity)
+                self.telemetry.addData("PrimeVel 95", self.prime_velocity*0.9)
+                if velocity<self.prime_velocity*0.9:
+                    self.shooter_intake().setPower(0)
+                    self.telemetry.addData("MagDump", "Shooter intake deactivated")
+                else:
+                    self.shooter_intake().setPower(1)
+                    self.telemetry.addData("MagDump", "Shooter intake activated")
+                    self.telemetry.addData("Intake", self.shooter_intake().getVelocity())
+                    if abs(self.shooter_intake().getVelocity()) < 50:
+                        self.telemetry.addData("MagDump", "Reversing shooter")
+                        self.shooter_intake().setPower(-1)
+                        self.sleep(100)
             #BallPickup
             BallPickup=self.phase_of(name="BallPickup")
             if BallPickup==1 and self.InUse=="Free":
@@ -165,7 +192,7 @@ class Main(LinearOpMode):
             
             #Fishing
             if self.gamepad1.dpad_down:
-                self.chain_drop.setPosition(0.25)
+                self.chain_drop.setPosition(0.25)   
                 self.EnteredFishing = True
                 self.fishing.setPower(1)
                 self.telemetry.addLine("Entered Fishing mode")
@@ -182,19 +209,24 @@ class Main(LinearOpMode):
             #Climbing
             ServoMoves = self.phase_of("ClimbScaffold")
             if ServoMoves==1:
-                self.ClimbUpper.setDirection(CRServo.Direction.REVERSE)
+                self.ClimbUpper.setDirection(CRServo.Direction.FORWARD)
                 self.telemetry.addData("Climb dir", "UP")
             else:
-                self.ClimbUpper.setDirection(CRServo.Direction.FORWARD)
+                self.ClimbUpper.setDirection(CRServo.Direction.REVERSE)
                 self.telemetry.addData("Climb dir", "DOWN")
             self.ClimbUpper.setPower(self.gamepad1.left_trigger)
             
+            #FixatorRelease
+            if self.gamepad1.left_stick_button and not self.DidUseFixator:
+                self.fixator_release.setPower(-1)
+                self.sleep(1000)
+                self.fixator_release.setPower(0)
             #cyclePhase
             self.cyclePhase("MagDump", self.gamepad1.cross)
             self.cyclePhase("BallPickup", self.gamepad1.circle)
             self.cyclePhase(name="ClimbDirection", pressed=self.floattobool(self.gamepad1.right_trigger))
             self.cyclePhase(name="ClimbScaffold", pressed=self.gamepad1.dpad_left)
-            
+
             #telemetry
             self.telemetry.update()
             
