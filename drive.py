@@ -83,10 +83,10 @@ class OmniDrive:
         for name in self.WHEEL_NAMES:
             self.motors.append(hw.get(DcMotorEx, name))
         # Same directions the TeleOp always had: the mix above depends on them.
-        self.motors[0].setDirection(DcMotorSimple.Direction.FORWARD)
-        self.motors[1].setDirection(DcMotorSimple.Direction.REVERSE)
-        self.motors[2].setDirection(DcMotorSimple.Direction.REVERSE)
-        self.motors[3].setDirection(DcMotorSimple.Direction.FORWARD)
+        self.motors[0].setDirection(DcMotorSimple.Direction.REVERSE)
+        self.motors[1].setDirection(DcMotorSimple.Direction.FORWARD)
+        self.motors[2].setDirection(DcMotorSimple.Direction.FORWARD)
+        self.motors[3].setDirection(DcMotorSimple.Direction.REVERSE)
         for m in self.motors:
             m.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER)
             m.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)

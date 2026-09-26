@@ -52,4 +52,20 @@ class aftercare(LinearOpMode):
         self.waitForStart()
         # ── On start: loops until STOP is pressed ──
         while self.opModeIsActive():
+            if self.gamepad2.dpad_left:
+                self.lf.setPower(1)
+            else:
+                self.lf.setPower(0)
+            if self.gamepad2.dpad_up:
+                self.rf.setPower(1)
+            else:
+                self.rf.setPower(0)
+            if self.gamepad2.dpad_right:
+                self.rb.setPower(1)
+            else:
+                self.rb.setPower(0)
+            if self.gamepad2.dpad_down:
+                self.lb.setPower(1)
+            else:
+                self.lb.setPower(0)
             self.telemetry.update()

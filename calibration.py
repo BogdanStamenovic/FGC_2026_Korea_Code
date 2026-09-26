@@ -207,8 +207,8 @@ class Calibration(LinearOpMode):
     def step_motors(self) -> None:
         if not self.ask("1. Motor check  (ON BLOCKS)",
                         "Put the robot ON BLOCKS: all four wheels in the air.\n"
-                        "Each wheel spins alone for 1 s, the way it turns\n"
-                        "when the robot drives FORWARD. Watch which wheel moves.\n\n"
+                        "Each wheel spins alone in BOTH directions. Watch\n"
+                        "which wheel moves and whether it reverses.\n\n"
                         "cross/A: start    B: back"):
             return
         signs: list[float] = [1.0, 1.0, 1.0, 1.0]
@@ -241,6 +241,27 @@ class Calibration(LinearOpMode):
                 self.fail("Encoder not counting",
                           f"{long_name} ({name}) turned but its encoder barely counted.\n"
                           "Check the encoder cable at the motor and at the hub port.")
+                return
+            reverse_before = self.drive.raw_position(i)
+            self.drive.set_raw(i, -0.35 * self.drive.FWD[i])
+            self.hold(1000)
+            self.drive.set_raw(i, 0.0)
+            self.hold(400)
+            reverse_moved = self.drive.raw_position(i) - reverse_before
+            if not self.ask(f"1. Wheel {name} reverse",
+                            f"Did the same {long_name.upper()} wheel spin\n"
+                            "the OPPOSITE way, as if driving BACKWARD?\n"
+                            f"Encoder: {reverse_moved:.0f} ticks\n\n"
+                            "cross/A: yes    B: no"):
+                self.fail("Motor reverse check failed",
+                          f"{long_name} ({name}) did not reverse correctly.\n"
+                          "Check the motor and its wiring before calibrating.\n"
+                          "The drive needs both directions for strafe.")
+                return
+            if abs(reverse_moved) < 100 or moved * reverse_moved >= 0:
+                self.fail("Encoder reverse check failed",
+                          f"{long_name} ({name}) did not count in both directions.\n"
+                          "Check the motor and encoder wiring before calibrating.")
                 return
             # The SDK already flips the encoder with setDirection; a remaining
             # mismatch is a wiring oddity, compensated rather than failed.

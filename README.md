@@ -19,6 +19,8 @@ Each step explains itself before anything moves and saves as soon as you
 accept it; the file survives power cycles and every OpMode loads it at INIT.
 
 1-2 need the robot **on blocks** (wheels in the air), 3-9 on the floor.
+Step 1 now checks each wheel in both directions; a wheel that only runs one
+way cannot pass the motor check.
 Redo 2 after changing a motor or gearbox, 3-5 after moving the Control Hub,
 6-8 after changing wheels or the floor surface. Step 9 changes nothing: it
 drives a 60 cm square so you can see how good the numbers are.

@@ -187,7 +187,9 @@ class Main(LinearOpMode):
             else:
                 self.gamepad1.rumbleBlips(2)
         self.drive.update()
-        self.drive.teleop(-self.gamepad1.right_stick_y, self.gamepad1.right_stick_x, self.gamepad1.left_stick_x)
+        # The calibrated drive's positive rotation turns left on this robot;
+        # invert only the driver's turn stick so moving it right turns right.
+        self.drive.teleop(-self.gamepad1.right_stick_y, self.gamepad1.right_stick_x, -self.gamepad1.left_stick_x)
 
     # ------------------------------------------------------------------ buttons
 
