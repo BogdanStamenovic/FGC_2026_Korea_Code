@@ -221,12 +221,17 @@ class OmniDrive:
         self.heading_deg = 0.0
         self.hold_active = False
 
+    def update_heading(self) -> None:
+        """Heading only: one IMU read. All TeleOp needs; the encoders
+        (odometry) are for autonomous and calibration."""
+        raw = self.raw_unwrapped()
+        self.heading_deg = raw * self.cal.imu_scale - self.cal.imu_drift * self.cal.imu_scale * self.yaw_timer.seconds()
+
     def update(self) -> None:
         """Once per loop: heading from the IMU, position from the encoders.
         x is forward and y is left of where the robot stood at start()."""
         before = self.heading_deg
-        raw = self.raw_unwrapped()
-        self.heading_deg = raw * self.cal.imu_scale - self.cal.imu_drift * self.cal.imu_scale * self.yaw_timer.seconds()
+        self.update_heading()
         pos = self.positions()
         delta: list[float] = []
         for i in range(4):
@@ -352,6 +357,11 @@ class OmniDrive:
             if self.hold_active:
                 correction = self.heading_correction(self.hold_target)
         self.drive_corrected(fwd, strafe, rot, correction)
+
+    def heading_useful(self) -> bool:
+        """Whether TeleOp needs the IMU at all: heading hold is the only user,
+        and it does nothing until the Turn ramp step is saved."""
+        return self.hold_enabled and self.use_corrections and self.cal.has("ramp")
 
     def teleop_gamepad(self, gp: Gamepad) -> None:
         """The driver's sticks, in one place for Main and Calibration: left

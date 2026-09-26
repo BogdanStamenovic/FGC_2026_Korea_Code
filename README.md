@@ -10,6 +10,7 @@ Hardware configuration on the hub: `FGC2026-Incheon`.
 | `drive.py` | `OmniDrive`: X-drive mix, calibrated corrections, heading hold, odometry, `drive_cm` / `turn_to` for autonomous. |
 | `drive_cal.py` | `DriveCal`: the saved numbers, `/sdcard/FIRST/settings/omni_calibration.txt`. |
 | `jam.py` | `JamGuard`: detects a stuck intake, backs it out, gives up after 4 tries in 3 s. |
+| `gamepad_test.py` | TeleOp **Gamepad test**: names every button pressed on either gamepad (for finding what M1/M2 send). |
 | `aftercare.py` | Empty after-match OpMode. |
 
 ## Calibrating the drive
@@ -29,6 +30,32 @@ strafing, no turning) so you can see how good the numbers are.
 Until step 5 (Turn ramp) is saved, heading hold stays off: which way the
 robot turns for +rotation is only known once it has been measured, and a
 wrong guess would make heading hold spin the robot.
+
+## Controls and manual mode
+
+The full list is at the top of `main.py`. ClimbUpper goes up on triangle until
+the `climbLimit` magnetic switch (configure it as a Digital Device, or as a
+REV Touch Sensor, under that name; without it triangle stops after 5 s). The
+Climber motor has ClimbUpper's old controls: dpad left for up/down, left
+trigger for power. The fixator is on L3 or R3 until the Gamepad test shows
+what M1/M2 send; then change `fixator_pressed()` in `main.py`.
+
+The first touch on gamepad 2 switches to manual mode for the rest of the
+match: gamepad 2 takes over with the same layout and gamepad 1 is ignored.
+Nothing is automatic then except the collector's unjamming.
+
+## Loop speed
+
+Every hub command blocks the OpMode loop (~2-3 ms each; a command the hub
+does not answer blocks up to 250 ms while the SDK resends it), and the
+sticks and buttons are only read once per loop. A slow loop is what makes
+inputs late, short presses disappear, and a small turn become a big one.
+Main therefore reads each hub once per loop (bulk caching), reads the IMU
+only when heading hold can use it, reads motor current 10 times a second,
+and builds telemetry 10 times a second. The flywheel also starts over 300 ms
+instead of at once, to soften the current spike that coincided with the
+stalls. In the simulator a loop while driving and shooting went from 24 to
+10 ms; the `Loop` telemetry line shows the real number on the robot.
 
 ## Driving and the telemetry that explains it
 

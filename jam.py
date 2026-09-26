@@ -44,6 +44,9 @@ class JamGuard:
     UNJAM_WINDOW_MS: float = 3000.0
     # The free-running speed is only learned from power at least this high.
     LEARN_MIN_POWER: float = 0.3
+    # Motor current is not part of the hub's bulk read: every reading is its
+    # own Expansion Hub command. Once per 100 ms is plenty for a 400 ms stall.
+    CURRENT_EVERY_MS: float = 100.0
 
     name: str
     motor: DcMotorEx
@@ -60,6 +63,7 @@ class JamGuard:
     amps: float
     faulted_now: bool
     total_unjams: int
+    amps_ms: float
     last_cause: str
 
     def __init__(self, name: str, motor: DcMotorEx) -> None:
@@ -68,6 +72,7 @@ class JamGuard:
         self.clock = ElapsedTime()
         self.free_tps_per_power = 0.0
         self.total_unjams = 0
+        self.amps_ms = -1.0e9
         self.last_cause = ""
         self.rearm()
 
@@ -139,7 +144,9 @@ class JamGuard:
         forward_tps = self.velocity
         if power < 0:
             forward_tps = -forward_tps
-        self.amps = self.motor.getCurrent(CurrentUnit.AMPS)
+        if now - self.amps_ms >= self.CURRENT_EVERY_MS:
+            self.amps_ms = now
+            self.amps = self.motor.getCurrent(CurrentUnit.AMPS)
         slow = forward_tps < self.stuck_threshold(power) or self.amps > self.STALL_AMPS
         if not slow:
             self.slow_since = -1.0
