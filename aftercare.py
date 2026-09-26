@@ -1,24 +1,24 @@
-"""Starter pack for Gicko, generated 2026-09-20 from hardware configuration "FGC2026-Incheon".
+"""Aftercare: an empty OpMode to run after a match (resetting mechanisms,
+saving data for the next match). Nothing in it yet.
 
-Press INIT on the Driver Hub: everything above waitForStart() runs once.
-Press START: the while loop runs until STOP.
+Its hardware lookups match the "FGC2026-Incheon" configuration; asking for a
+device that isn't configured (the old "ShooterIntake") or with the wrong type
+(FixatorRelease as a Servo) crashes the OpMode at INIT.
 """
 
 # ── pyftc:config name="FGC2026-Incheon" fingerprint="c841abeba9d5c0ab" generated="2026-09-20" ──
 
 # ── pyftc:imports ──
-from main import Cycle
-from ftc.hardware import CRServo, DcMotor, DcMotorSimple, Servo
-from ftc.navigation import AngleUnit
+from ftc.hardware import CRServo, DcMotor, DcMotorEx, Servo
 from ftc.opmode import LinearOpMode, TeleOp
-from ftc.util import ElapsedTime
 # ── pyftc:imports:end ──
+
 
 @TeleOp(name="aftercare", group="pyftc")
 class aftercare(LinearOpMode):
     # ── pyftc:devices ──
-    collector: DcMotor
-    shooter: DcMotor
+    collector: DcMotorEx
+    shooter: DcMotorEx
     climber: DcMotor
     fishing: DcMotor
     lb: DcMotor
@@ -27,35 +27,15 @@ class aftercare(LinearOpMode):
     rf: DcMotor
     chain_drop: Servo
     chain_stop: Servo
-    shooter_intake: CRServo
-    fixator_release: Servo
+    fixator_release: CRServo
+    climb_upper: CRServo
     # ── pyftc:devices:end ──
-    cycle_register: dict[str, Cycle] = {}
-    cycle_List: list[str] = []
-    timer: ElapsedTime = ElapsedTime()
-    DEBOUNCE_MS: float = 500.0   # minimum time between two phase changes
-    def register_cyclePhase(self, name: str, count: int) -> None:
-        self.cycle_register[name] = Cycle(count-1, self.timer.milliseconds())
-        self.cycle_List.append(name)
 
-    def cyclePhase(self, name: str, pressed: bool) -> None:
-        """Advance one cycle. `pressed` must be read fresh every loop: a button
-        passed at registration time would be a copy of its value back then."""
-        cycle = self.cycle_register[name]
-        if pressed and self.timer.milliseconds() - cycle.last_ms > self.DEBOUNCE_MS:
-            if cycle.phase >= cycle.count:
-                cycle.phase = 0
-            else:
-                cycle.phase = cycle.phase + 1
-            cycle.last_ms = self.timer.milliseconds()
-
-    def phase_of(self, name: str) -> int:
-        return self.cycle_register[name].phase
     def runOpMode(self) -> None:
         # ── On ready: runs once when INIT is pressed ──
         # ── pyftc:init ──
-        self.collector = self.hardwareMap.get(DcMotor, "Collector")
-        self.shooter = self.hardwareMap.get(DcMotor, "shooter")
+        self.collector = self.hardwareMap.get(DcMotorEx, "Collector")
+        self.shooter = self.hardwareMap.get(DcMotorEx, "shooter")
         self.climber = self.hardwareMap.get(DcMotor, "Climber")
         self.fishing = self.hardwareMap.get(DcMotor, "Fishing")
         self.lb = self.hardwareMap.get(DcMotor, "LB")
@@ -64,16 +44,12 @@ class aftercare(LinearOpMode):
         self.rf = self.hardwareMap.get(DcMotor, "RF")
         self.chain_drop = self.hardwareMap.get(Servo, "chainDrop")
         self.chain_stop = self.hardwareMap.get(Servo, "ChainStop")
-        self.shooter_intake = self.hardwareMap.get(CRServo, "ShooterIntake")
-        self.fixator_release = self.hardwareMap.get(Servo, "FixatorRelease")
-
+        self.fixator_release = self.hardwareMap.get(CRServo, "FixatorRelease")
+        self.climb_upper = self.hardwareMap.get(CRServo, "ClimbUpper")
         # ── pyftc:init:end ──
         self.telemetry.addLine("Ready. Press START.")
         self.telemetry.update()
         self.waitForStart()
         # ── On start: loops until STOP is pressed ──
         while self.opModeIsActive():
-            
-
             self.telemetry.update()
-            
