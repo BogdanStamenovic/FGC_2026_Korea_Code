@@ -42,7 +42,6 @@ class Main(LinearOpMode):
     fixator_release: CRServo
     ClimbUpper: CRServo
     # ── pyftc:devices:end ──
-    
     #CyclePhase Vars
     cycle_register: dict[str, Cycle] = {}
     cycle_List: list[str] = []
@@ -131,18 +130,14 @@ class Main(LinearOpMode):
         while self.opModeIsActive():
 
             #OmniWheelMovement
-            self.lf.setPower(self.gamepad1.right_stick_y-self.gamepad1.right_stick_x)
-            self.rf.setPower(self.gamepad1.right_stick_y+self.gamepad1.right_stick_x)
-            self.lb.setPower(-self.gamepad1.right_stick_y-self.gamepad1.right_stick_x)
-            self.rb.setPower(-self.gamepad1.right_stick_y+self.gamepad1.right_stick_x)
-
-            self.lf.setPower(-self.gamepad1.left_stick_x)
-            self.rf.setPower(self.gamepad1.left_stick_x)
-            self.lb.setPower(self.gamepad1.left_stick_x)
-            self.rb.setPower(-self.gamepad1.left_stick_x)
+            self.lf.setPower(self.gamepad1.right_stick_y-self.gamepad1.right_stick_x+self.gamepad1.left_stick_x)
+            self.rf.setPower(self.gamepad1.right_stick_y+self.gamepad1.right_stick_x-self.gamepad1.left_stick_x)
+            self.lb.setPower(-self.gamepad1.right_stick_y-self.gamepad1.right_stick_x-self.gamepad1.left_stick_x)
+            self.rb.setPower(-self.gamepad1.right_stick_y+self.gamepad1.right_stick_x+self.gamepad1.left_stick_x)
             velocity = self.shooter.getVelocity()
             self.telemetry.addData("Prime Velocity", velocity)
             #Shooter and shooter intake
+
             MagDump: int = self.phase_of("MagDump")
             if MagDump==1 and self.InUse=="Free":  
                 self.shooter_intake().setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
@@ -179,6 +174,7 @@ class Main(LinearOpMode):
                         self.telemetry.addData("MagDump", "Reversing shooter")
                         self.shooter_intake().setPower(-1)
                         self.sleep(100)
+                        
             #BallPickup
             BallPickup=self.phase_of(name="BallPickup")
             if BallPickup==1 and self.InUse=="Free":
@@ -221,6 +217,7 @@ class Main(LinearOpMode):
                 self.fixator_release.setPower(-1)
                 self.sleep(1000)
                 self.fixator_release.setPower(0)
+                self.DidUseFixator=True
             #cyclePhase
             self.cyclePhase("MagDump", self.gamepad1.cross)
             self.cyclePhase("BallPickup", self.gamepad1.circle)
