@@ -16,9 +16,7 @@ Controls, on gamepad 1:
   triangle            ClimbUpper up until the climbLimit switch; press again to stop
   dpad left           Climber direction: up / down (starts down)
   left trigger        Climber power
-  L3 or R3            fixator release (once per match). Meant for the M1/M2
-                      back buttons: see what they send with the "Gamepad test"
-                      OpMode and change fixator_pressed() to that button.
+  share               fixator release (once per match)
 
 MANUAL MODE: the first time anything on gamepad 2 is touched, gamepad 2 takes
 over for the rest of the match and gamepad 1 is ignored. Same layout, but
@@ -483,7 +481,8 @@ class Main(LinearOpMode):
         self.climber.setPower(way * self.pad.left_trigger)
 
     def fixator_pressed(self) -> bool:
-        return self.pad.left_stick_button or self.pad.right_stick_button
+        # The SDK's name for share is back (PS share = Xbox back).
+        return self.pad.back
 
     def update_fixator(self, now: float) -> None:
         # Timed instead of sleep(1000): sleeping froze the loop, and the drive
