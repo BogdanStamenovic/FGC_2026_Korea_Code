@@ -13,6 +13,11 @@ Stuck means, for longer than STALL_MS, either
   - the motor draws more than STALL_AMPS (HD Hex stalls at 8.5 A per REV).
 Nothing is judged during GRACE_MS after the power goes from 0 to on, or after
 an unjam: a motor spinning up is slow on purpose.
+
+The limits were loosened on 26 Sep (stall 150 -> 400 ms, 25% -> 15% of free
+speed, 6 -> 7.5 A, 3 -> 4 unjams): balls passing through slow the intake
+briefly, and that was being backed out as a jam. last_cause says what
+triggered the most recent unjam, so the next tuning can start from numbers.
 """
 
 from ftc.hardware import DcMotorEx
@@ -27,15 +32,15 @@ class JamGuard:
     UNJAM: int = 3
     FAULT: int = 4
 
-    GRACE_MS: float = 250.0
-    STALL_MS: float = 150.0
-    STALL_FRACTION: float = 0.25
-    MIN_TPS: float = 50.0
-    STALL_AMPS: float = 6.0
+    GRACE_MS: float = 500.0
+    STALL_MS: float = 400.0
+    STALL_FRACTION: float = 0.15
+    MIN_TPS: float = 40.0
+    STALL_AMPS: float = 7.5
     UNJAM_MS: float = 250.0
     UNJAM_POWER: float = 1.0
     # More than MAX_UNJAMS unjams within UNJAM_WINDOW_MS means it isn't clearing.
-    MAX_UNJAMS: int = 3
+    MAX_UNJAMS: int = 4
     UNJAM_WINDOW_MS: float = 3000.0
     # The free-running speed is only learned from power at least this high.
     LEARN_MIN_POWER: float = 0.3
@@ -55,6 +60,7 @@ class JamGuard:
     amps: float
     faulted_now: bool
     total_unjams: int
+    last_cause: str
 
     def __init__(self, name: str, motor: DcMotorEx) -> None:
         self.name = name
@@ -62,6 +68,7 @@ class JamGuard:
         self.clock = ElapsedTime()
         self.free_tps_per_power = 0.0
         self.total_unjams = 0
+        self.last_cause = ""
         self.rearm()
 
     def rearm(self) -> None:
@@ -164,6 +171,10 @@ class JamGuard:
             self.faulted_now = True
             self.motor.setPower(0.0)
             return
+        if self.amps > self.STALL_AMPS:
+            self.last_cause = f"{self.amps:.1f} A > {self.STALL_AMPS:.1f} A"
+        else:
+            self.last_cause = f"{forward_tps:.0f} t/s < {self.stuck_threshold(power):.0f} t/s"
         self.unjam_times.append(now)
         self.total_unjams = self.total_unjams + 1
         self.unjam_dir = -1.0
@@ -180,5 +191,8 @@ class JamGuard:
         if self.state == self.SPINUP:
             return "spinning up"
         if self.state == self.RUN:
-            return f"ok {self.velocity:.0f} t/s {self.amps:.1f} A"
+            text = f"ok {self.velocity:.0f} t/s {self.amps:.1f} A"
+            if self.total_unjams > 0:
+                text = text + f", {self.total_unjams} unjams, last: {self.last_cause}"
+            return text
         return "off"
