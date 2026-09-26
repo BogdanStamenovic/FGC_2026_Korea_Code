@@ -19,7 +19,7 @@ What each correction fixes (DriveCal has the measured numbers):
 
 import math
 
-from ftc.hardware import DcMotor, DcMotorEx, DcMotorSimple, HardwareMap, IMU, RevHubOrientationOnRobot
+from ftc.hardware import DcMotor, DcMotorEx, DcMotorSimple, Gamepad, HardwareMap, IMU, RevHubOrientationOnRobot
 from ftc.navigation import AngleUnit
 from ftc.opmode import LinearOpMode
 from ftc.util import ElapsedTime, Range
@@ -317,6 +317,13 @@ class OmniDrive:
             else:
                 rot = 0.0
         self.drive(fwd, strafe, rot)
+
+    def teleop_gamepad(self, gp: Gamepad) -> None:
+        """The driver's sticks, in one place for Main and Calibration: left
+        stick moves (up = forward, sideways = strafe), right stick X turns."""
+        # The calibrated drive's positive rotation turns left on this robot;
+        # the turn stick is inverted so pushing it right turns right.
+        self.teleop(-gp.left_stick_y, gp.left_stick_x, -gp.right_stick_x)
 
     # ------------------------------------------------------------------ autonomous
 

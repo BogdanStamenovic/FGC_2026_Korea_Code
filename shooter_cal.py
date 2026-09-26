@@ -1,16 +1,17 @@
-"""Shooter calibration: every test shot the Calibration OpMode's shooter step
-fired, saved as plain text on the hub, and the scoring bands derived from them.
+"""Shooter calibration: for each tested flywheel speed, one distance from the
+goal wall where the Calibration OpMode's shooter step proved it scores (5
+single balls in a row plus a 5-ball burst, all in, from one spot). Saved as
+plain text on the hub.
 
-File: /sdcard/FIRST/settings/shooter_calibration.txt. One line per shot:
-    shot=<target t/s>,<measured t/s>,<distance cm>,<1 hit / 0 miss>
-Raw shots are stored, not the bands, so a better way to read them later needs
-no new shots; the file can be pulled with adb and opened in a spreadsheet.
+File: /sdcard/FIRST/settings/shooter_calibration.txt. One line per speed:
+    point=<target t/s>,<measured t/s>,<distance cm>
+The measured speed is what the flywheel actually settled at; Main compares
+its own settled speed ("prime") against that, not against the target.
+Version-1 files (raw shot lines) are ignored: their "shot=" lines are unknown
+keys here.
 
-Bands: for each target speed, the shots are sorted by distance and the longest
-unbroken run of hits is where that speed scores, widened by half the step
-between stops on both sides. Main asks band_for(prime) with the flywheel's
-settled speed and gets a distance window, interpolated between the two tested
-speeds around it.
+Main asks band_for(prime): the distance interpolated between the two speeds
+around prime, +- TOLERANCE_CM.
 """
 
 from ftc.io import AppUtil, File, ReadWriteFile
@@ -18,29 +19,24 @@ from ftc.io import AppUtil, File, ReadWriteFile
 
 class ShooterCal:
     FILE_NAME: str = "shooter_calibration.txt"
-    VERSION: int = 1
-    # A speed up to 5% outside the tested ones still uses the nearest band;
+    VERSION: int = 2
+    # How far from a proven distance still counts as in range. The proof was
+    # made from one spot, so this is a guess: widen it if the rumble is too
+    # picky, narrow it if shots from the edge miss.
+    TOLERANCE_CM: float = 5.0
+    # A speed up to 5% outside the tested ones still uses the nearest point;
     # further out the table says nothing.
     EDGE_FRACTION: float = 0.05
 
     loaded: bool
     load_error: str
-    interval_cm: float
-    shot_target: list[float]
-    shot_tps: list[float]
-    shot_cm: list[float]
-    shot_hit: list[bool]
-
-    # Derived by build(), one entry per tested target speed, ascending speed.
-    level_target: list[float]
-    level_tps: list[float]
-    level_has_band: list[bool]
-    level_lo: list[float]
-    level_hi: list[float]
-    level_hits: list[int]
-    level_shots: list[int]
+    # Sorted by measured speed, ascending.
+    point_target: list[float]
+    point_tps: list[float]
+    point_cm: list[float]
 
     # band_for()'s answer.
+    found_cm: float
     found_lo: float
     found_hi: float
 
@@ -50,125 +46,63 @@ class ShooterCal:
     def reset(self) -> None:
         self.loaded = False
         self.load_error = ""
-        self.interval_cm = 20.0
-        self.shot_target = []
-        self.shot_tps = []
-        self.shot_cm = []
-        self.shot_hit = []
+        self.point_target = []
+        self.point_tps = []
+        self.point_cm = []
+        self.found_cm = 0.0
         self.found_lo = 0.0
         self.found_hi = 0.0
-        self.build()
-
-    def add(self, target: float, tps: float, cm: float, hit: bool) -> None:
-        self.shot_target.append(target)
-        self.shot_tps.append(tps)
-        self.shot_cm.append(cm)
-        self.shot_hit.append(hit)
 
     def count(self) -> int:
-        return len(self.shot_cm)
+        return len(self.point_cm)
 
-    def hits(self) -> int:
-        n = 0
-        for h in self.shot_hit:
-            if h:
-                n = n + 1
-        return n
+    def index_of(self, target: float) -> int:
+        for k in range(len(self.point_target)):
+            if self.point_target[k] == target:
+                return k
+        return -1
 
-    # ------------------------------------------------------------------ bands
-
-    def build(self) -> None:
-        self.level_target = []
-        self.level_tps = []
-        self.level_has_band = []
-        self.level_lo = []
-        self.level_hi = []
-        self.level_hits = []
-        self.level_shots = []
-        targets: list[float] = []
-        for t in self.shot_target:
-            k = 0
-            while k < len(targets) and targets[k] < t:
-                k = k + 1
-            if k == len(targets) or targets[k] != t:
-                targets.insert(k, t)
-        for t in targets:
-            self.build_level(t)
-
-    def build_level(self, target: float) -> None:
-        # This speed's shots, sorted by distance.
-        cms: list[float] = []
-        hit: list[bool] = []
-        tps_sum = 0.0
-        hits = 0
-        for i in range(len(self.shot_cm)):
-            if self.shot_target[i] != target:
-                continue
-            tps_sum = tps_sum + self.shot_tps[i]
-            if self.shot_hit[i]:
-                hits = hits + 1
-            k = 0
-            while k < len(cms) and cms[k] <= self.shot_cm[i]:
-                k = k + 1
-            cms.insert(k, self.shot_cm[i])
-            hit.insert(k, self.shot_hit[i])
-        best_start = -1
-        best_len = 0
-        run_start = -1
-        for k in range(len(cms)):
-            if hit[k]:
-                if run_start < 0:
-                    run_start = k
-                if k - run_start + 1 > best_len:
-                    best_len = k - run_start + 1
-                    best_start = run_start
-            else:
-                run_start = -1
-        pad = self.interval_cm / 2.0
-        self.level_target.append(target)
-        self.level_tps.append(tps_sum / len(cms))
-        self.level_hits.append(hits)
-        self.level_shots.append(len(cms))
-        if best_start < 0:
-            self.level_has_band.append(False)
-            self.level_lo.append(0.0)
-            self.level_hi.append(0.0)
-        else:
-            self.level_has_band.append(True)
-            self.level_lo.append(cms[best_start] - pad)
-            self.level_hi.append(cms[best_start + best_len - 1] + pad)
+    def set_point(self, target: float, tps: float, cm: float) -> None:
+        """Add a speed's distance, replacing an earlier one for the same target."""
+        old = self.index_of(target)
+        if old >= 0:
+            self.point_target.pop(old)
+            self.point_tps.pop(old)
+            self.point_cm.pop(old)
+        k = 0
+        while k < len(self.point_tps) and self.point_tps[k] < tps:
+            k = k + 1
+        self.point_target.insert(k, target)
+        self.point_tps.insert(k, tps)
+        self.point_cm.insert(k, cm)
 
     def band_for(self, tps: float) -> bool:
         """Distance window (found_lo..found_hi, cm) where a flywheel settled at
         tps scores. False when the table has nothing for that speed."""
-        n = len(self.level_tps)
+        n = len(self.point_tps)
         if n == 0:
             return False
-        if tps <= self.level_tps[0]:
-            return self.use_level(0, tps)
-        if tps >= self.level_tps[n - 1]:
-            return self.use_level(n - 1, tps)
+        if tps <= self.point_tps[0]:
+            return self.use_point(0, tps)
+        if tps >= self.point_tps[n - 1]:
+            return self.use_point(n - 1, tps)
         k = 0
-        while self.level_tps[k + 1] < tps:
+        while self.point_tps[k + 1] < tps:
             k = k + 1
-        if self.level_has_band[k] and self.level_has_band[k + 1]:
-            f = (tps - self.level_tps[k]) / (self.level_tps[k + 1] - self.level_tps[k])
-            self.found_lo = self.level_lo[k] + f * (self.level_lo[k + 1] - self.level_lo[k])
-            self.found_hi = self.level_hi[k] + f * (self.level_hi[k + 1] - self.level_hi[k])
-            return True
-        # Next to a speed that never scored: only trust a band right beside it.
-        if tps - self.level_tps[k] < self.level_tps[k + 1] - tps:
-            return self.use_level(k, tps)
-        return self.use_level(k + 1, tps)
-
-    def use_level(self, k: int, tps: float) -> bool:
-        if not self.level_has_band[k]:
-            return False
-        if abs(tps - self.level_tps[k]) > self.EDGE_FRACTION * self.level_tps[k]:
-            return False
-        self.found_lo = self.level_lo[k]
-        self.found_hi = self.level_hi[k]
+        f = (tps - self.point_tps[k]) / (self.point_tps[k + 1] - self.point_tps[k])
+        self.set_found(self.point_cm[k] + f * (self.point_cm[k + 1] - self.point_cm[k]))
         return True
+
+    def use_point(self, k: int, tps: float) -> bool:
+        if abs(tps - self.point_tps[k]) > self.EDGE_FRACTION * self.point_tps[k]:
+            return False
+        self.set_found(self.point_cm[k])
+        return True
+
+    def set_found(self, cm: float) -> None:
+        self.found_cm = cm
+        self.found_lo = cm - self.TOLERANCE_CM
+        self.found_hi = cm + self.TOLERANCE_CM
 
     # ------------------------------------------------------------------ file
 
@@ -182,30 +116,23 @@ class ShooterCal:
         try:
             for line in ReadWriteFile.readFile(f).split("\n"):
                 parts = line.strip().split("=")
-                if len(parts) != 2:
+                if len(parts) != 2 or parts[0] != "point":
                     continue
-                if parts[0] == "interval_cm":
-                    self.interval_cm = float(parts[1])
-                elif parts[0] == "shot":
-                    v = parts[1].split(",")
-                    if len(v) != 4:
-                        raise ValueError("bad shot line '" + line + "'")
-                    self.add(float(v[0]), float(v[1]), float(v[2]), v[3] == "1")
+                v = parts[1].split(",")
+                if len(v) != 3:
+                    raise ValueError("bad point line '" + line + "'")
+                self.set_point(float(v[0]), float(v[1]), float(v[2]))
             self.loaded = True
         except ValueError as e:
-            # A corrupt file must not stop Main: no bands, and say so.
+            # A corrupt file must not stop Main: no table, and say so.
             self.reset()
             self.load_error = "shooter table unreadable: " + str(e)
-        self.build()
 
     def save(self) -> None:
         # str(), not f"{x:.1f}": String.format follows the hub's locale and
         # would write "1,5", which the comma-separated line then splits apart.
         text = "version=" + str(self.VERSION) + "\n"
-        text = text + "interval_cm=" + str(self.interval_cm) + "\n"
-        for i in range(len(self.shot_cm)):
-            hit = "1" if self.shot_hit[i] else "0"
-            text = text + "shot=" + str(self.shot_target[i]) + "," + str(self.shot_tps[i]) + "," + str(self.shot_cm[i]) + "," + hit + "\n"
+        for k in range(len(self.point_cm)):
+            text = text + "point=" + str(self.point_target[k]) + "," + str(self.point_tps[k]) + "," + str(self.point_cm[k]) + "\n"
         ReadWriteFile.writeFile(self.file(), text)
         self.loaded = True
-        self.build()

@@ -135,8 +135,12 @@ class RangeFinder:
         Median, not mean: one stray reflection must not move the number."""
         if not self.valid():
             return -1.0
+        return RangeFinder.median(self.recent)
+
+    @staticmethod
+    def median(values: list[float]) -> float:
         s: list[float] = []
-        for d in self.recent:
+        for d in values:
             k = 0
             while k < len(s) and s[k] < d:
                 k = k + 1

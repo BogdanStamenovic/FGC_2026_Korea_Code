@@ -4,8 +4,8 @@ Press INIT on the Driver Hub: everything above waitForStart() runs once.
 Press START: the while loop runs until STOP.
 
 Controls, all on gamepad 1:
-  right stick         drive: up = forward, sideways = strafe
-  left stick X        turn
+  left stick          drive: up = forward, sideways = strafe
+  right stick X       turn
   options             heading hold on/off (on at start; 1 rumble = on, 2 = off)
   cross               MagDump: off -> spin up shooter -> shoot -> off
                       While spun up, the gamepad rumbles as long as the robot
@@ -198,9 +198,7 @@ class Main(LinearOpMode):
             else:
                 self.gamepad1.rumbleBlips(2)
         self.drive.update()
-        # The calibrated drive's positive rotation turns left on this robot;
-        # invert only the driver's turn stick so moving it right turns right.
-        self.drive.teleop(-self.gamepad1.right_stick_y, self.gamepad1.right_stick_x, -self.gamepad1.left_stick_x)
+        self.drive.teleop_gamepad(self.gamepad1)
 
     # ------------------------------------------------------------------ buttons
 
@@ -342,9 +340,9 @@ class Main(LinearOpMode):
             return "Shooter: " + self.shot_cal.load_error
         if not self.range_finder.present:
             return "Shooter: " + self.range_finder.describe() + ", no range rumble"
-        if self.shot_cal.hits() == 0:
-            return "Shooter: no calibration shots scored yet, no range rumble"
-        return f"Shooter: {self.shot_cal.count()} calibration shots, {len(self.shot_cal.level_tps)} speeds"
+        if self.shot_cal.count() == 0:
+            return "Shooter: not calibrated (Calibration step 11), no range rumble"
+        return f"Shooter: distances for {self.shot_cal.count()} speeds"
 
     def show_status(self) -> None:
         hold = "ON" if self.drive.hold_enabled else "off"
@@ -374,7 +372,7 @@ class Main(LinearOpMode):
             return text
         if not self.has_band:
             return text + f", no scoring band for {self.flywheel.prime:.0f} t/s"
-        text = text + f", scores {self.shot_cal.found_lo:.0f}-{self.shot_cal.found_hi:.0f} cm"
+        text = text + f", scores at {self.shot_cal.found_cm:.0f} +-{self.shot_cal.TOLERANCE_CM:.0f} cm"
         if self.in_range:
             text = text + "  IN RANGE"
         return text

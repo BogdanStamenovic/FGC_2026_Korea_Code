@@ -12,11 +12,12 @@ the rest on the floor. Redo 2 after changing a motor or gearbox, 3-5 after
 moving the hub, 6-8 after changing wheels or carpet. Steps 9 and 10 change
 nothing; they drive a 60 cm / 1 m square to show how good the numbers are.
 
-Step 11 is the shooter, not the drive: starting close to the goal wall, the
-robot backs away in steps, fires one ball at every test speed (ticks/s, set
-with the hub's velocity PID) at every stop, and asks after each shot whether
-it went in. The shots go to shooter_cal.py's file; Main turns them into the
-distance window where it rumbles.
+Step 11 is the shooter, not the drive: for each test speed (ticks/s, held
+by the hub's velocity PID, 1700 up in steps) the driver drives to where they
+think it scores and fires single balls, answering in or missed after each.
+Five in a row from one spot, then a 5-ball burst all in, and the distance
+the sensor reads there is saved for that speed (shooter_cal.py). Main
+rumbles when its flywheel speed and the distance match the table.
 
 How the steps map onto the usual FTC tuning procedures:
   1 motors   Road Runner's MotorDirectionDebugger
@@ -30,7 +31,7 @@ How the steps map onto the usual FTC tuning procedures:
   6/7 push   Road Runner's Forward/LateralPushTest: ticks per cm, slip included
   8 drift    the turning left when driving straight, cancelled by feedforward
   9/10       closed-loop squares on odometry, checked against a tape measure
-  11 shooter  a distance x speed grid of test shots, hit or miss per shot
+  11 shooter  per speed, a distance proven by 5 singles + a 5-ball burst
 """
 
 from ftc.hardware import DcMotor, DcMotorEx, DcMotorSimple, DistanceSensor
@@ -59,13 +60,19 @@ class Calibration(LinearOpMode):
     SPIN_TURNS: int = 5
     WHEEL_LEVELS: list[float] = [0.4, 0.6, 0.8, 1.0]
     FEED_POWER: float = 1.0
-    # A shot is seen as the flywheel dropping this far below its settled
-    # speed; the feed stops SHOT_AFTER_DIP_MS later so only one ball leaves.
-    SHOT_DIP: float = 0.04
-    SHOT_AFTER_DIP_MS: float = 150.0
-    SHOT_MAX_FEED_MS: float = 1500.0
+    # One ball is loaded per single shot and the feed simply runs this long:
+    # stopping on the flywheel's dip missed shots on the robot.
+    SINGLE_FEED_MS: float = 2000.0
+    # The burst feeds like Main (only while the flywheel is at >= 90% of its
+    # settled speed) for this long, enough for 5 balls with recovery.
+    BURST_FEED_MS: float = 6000.0
+    FEED_GATE: float = 0.9
+    STREAK_NEEDED: int = 5
+    BURST_BALLS: int = 5
+    # Moving farther than this from where a streak started restarts it: the
+    # streak proves one distance.
+    MOVE_TOLERANCE_CM: float = 5.0
     SHOOTER_MAX_TPS: float = 2400.0
-    SENSOR_RATED_CM: float = 200.0
 
     cal: DriveCal
     drive: OmniDrive
@@ -81,12 +88,9 @@ class Calibration(LinearOpMode):
     feed_guard: JamGuard
     # Shooter step settings, kept between runs of the step.
     sh_row: int
-    sh_interval: float
-    sh_stops: int
     sh_vmin: float
     sh_vmax: float
     sh_vstep: float
-    sh_backward: bool
     sh_fresh: bool
 
     def runOpMode(self) -> None:
@@ -103,12 +107,9 @@ class Calibration(LinearOpMode):
         self.shot_cal.load()
         self.feed_guard = JamGuard("shooter intake", self.collector)
         self.sh_row = 0
-        self.sh_interval = 20.0
-        self.sh_stops = 6
-        self.sh_vmin = 1400.0
+        self.sh_vmin = 1700.0
         self.sh_vmax = 2200.0
-        self.sh_vstep = 200.0
-        self.sh_backward = True
+        self.sh_vstep = 100.0
         self.sh_fresh = False
         self.last_result = ""
         if self.cal.load_error != "":
@@ -155,7 +156,7 @@ class Calibration(LinearOpMode):
             if i >= 8:
                 mark = "   "
             if self.STEP_KEYS[i] == "shooter":
-                extra = f"  {self.shot_cal.count()} shots saved"
+                extra = f"  {self.shot_cal.count()} speeds saved"
             self.telemetry.addLine(f"{cursor} {mark} {i + 1}. {self.STEP_TITLES[i]}  ({self.STEP_WHERE[i]}){extra}")
         if self.last_result != "":
             self.telemetry.addLine("")
@@ -513,9 +514,9 @@ class Calibration(LinearOpMode):
         self.gamepad1.resetEdgeDetection()
         while self.opModeIsActive():
             self.drive.update()
-            self.drive.drive(0.0, 0.0, 0.25 * self.gamepad1.left_stick_x)
+            self.drive.drive(0.0, 0.0, -0.25 * self.gamepad1.right_stick_x)
             self.show("4. Line it up again",
-                      "Turn with gamepad1 LEFT STICK X (slow) until the same\n"
+                      "Turn with gamepad1 RIGHT STICK X (slow) until the same\n"
                       "edge is exactly on the line again.\n"
                       f"IMU so far: {self.drive.unwrapped_yaw:.1f} deg\n\n"
                       "cross/A: lined up    B: cancel")
@@ -785,14 +786,14 @@ class Calibration(LinearOpMode):
         while v <= self.sh_vmax + 0.5:
             out.append(v)
             v = v + self.sh_vstep
-        # The top speed is the one Main's fresh battery reaches: always test it.
+        # The top speed is about what Main's fresh battery reaches: always test it.
         if out[len(out) - 1] < self.sh_vmax - 0.5:
             out.append(self.sh_vmax)
         return out
 
     def shooter_setup(self) -> bool:
         """The settings page. True to start, False for back or STOP."""
-        rows = 7
+        rows = 4
         self.gamepad1.resetEdgeDetection()
         self.range_finder.clear()
         while self.opModeIsActive():
@@ -800,41 +801,28 @@ class Calibration(LinearOpMode):
                 self.sh_row = (self.sh_row + rows - 1) % rows
             if self.gamepad1.dpadDownWasPressed():
                 self.sh_row = (self.sh_row + 1) % rows
-            step = 0.0
             if self.gamepad1.dpadRightWasPressed():
-                step = 1.0
+                self.shooter_adjust(1.0)
             if self.gamepad1.dpadLeftWasPressed():
-                step = -1.0
-            if step != 0.0:
-                self.shooter_adjust(step)
+                self.shooter_adjust(-1.0)
             self.drive.update()
             self.range_finder.update()
             speeds = self.shooter_speeds()
-            d = self.range_finder.cm()
-            lines = ["Put the robot AS CLOSE to the goal wall as it can shoot",
-                     "from, aimed at the goal, sensor facing the wall. It backs",
-                     "away in steps and fires one ball per speed at each stop.",
-                     "Load a ball before each shot (with a full magazine the",
-                     "feed stops once it sees the flywheel dip from a shot).",
+            lines = ["For each speed you drive the robot (left stick move,",
+                     "right stick turn) to where you think it scores and fire",
+                     "ONE ball at a time. 5 in a row from one spot, then a",
+                     "5-ball burst all in, saves that spot's distance.",
                      "",
                      "Distance now: " + self.range_finder.describe()]
-            labels = [f"step back     {self.sh_interval:.0f} cm",
-                      f"stops         {self.sh_stops}",
-                      f"slowest       {self.sh_vmin:.0f} t/s",
+            labels = [f"slowest       {self.sh_vmin:.0f} t/s",
                       f"fastest       {self.sh_vmax:.0f} t/s",
                       f"speed step    {self.sh_vstep:.0f} t/s",
-                      "away = robot  " + ("BACKWARD" if self.sh_backward else "FORWARD"),
-                      "saved shots   " + (f"START FRESH (drop {self.shot_cal.count()})" if self.sh_fresh else f"keep {self.shot_cal.count()}, add")]
+                      "saved speeds  " + (f"START FRESH (drop {self.shot_cal.count()})" if self.sh_fresh else f"keep {self.shot_cal.count()}")]
             for k in range(rows):
                 cursor = ">" if k == self.sh_row else " "
                 lines.append(cursor + " " + labels[k])
             lines.append("")
-            lines.append(f"{len(speeds)} speeds x {self.sh_stops} stops = {len(speeds) * self.sh_stops} shots")
-            if d > 0:
-                far = d + (self.sh_stops - 1) * self.sh_interval
-                lines.append(f"farthest stop ~{far:.0f} cm")
-                if far > self.SENSOR_RATED_CM:
-                    lines.append("  beyond the sensor's 200 cm rating: fewer stops")
+            lines.append(f"{len(speeds)} speeds to test")
             lines.append("")
             lines.append("dpad: choose/change   cross/A: start   B: back")
             self.telemetry.addLine("11. Shooter distance  (at the goal wall)")
@@ -850,17 +838,11 @@ class Calibration(LinearOpMode):
     def shooter_adjust(self, step: float) -> None:
         r = self.sh_row
         if r == 0:
-            self.sh_interval = min(50.0, max(5.0, self.sh_interval + 5.0 * step))
-        elif r == 1:
-            self.sh_stops = int(min(12.0, max(2.0, self.sh_stops + step)))
-        elif r == 2:
             self.sh_vmin = min(self.sh_vmax, max(400.0, self.sh_vmin + 100.0 * step))
-        elif r == 3:
+        elif r == 1:
             self.sh_vmax = min(self.SHOOTER_MAX_TPS, max(self.sh_vmin, self.sh_vmax + 100.0 * step))
-        elif r == 4:
+        elif r == 2:
             self.sh_vstep = min(500.0, max(50.0, self.sh_vstep + 50.0 * step))
-        elif r == 5:
-            self.sh_backward = not self.sh_backward
         else:
             self.sh_fresh = not self.sh_fresh
 
@@ -874,62 +856,37 @@ class Calibration(LinearOpMode):
             self.range_finder.update()
         return self.range_finder.cm()
 
-    def spin_to(self, v: float, status: str) -> bool:
-        """Spin the flywheel to v and wait until it settles. False when the
-        driver stopped the run (share/back) or STOP."""
-        self.flywheel.spin_velocity(v)
-        self.gamepad1.resetEdgeDetection()
-        while self.opModeIsActive() and not self.flywheel.ready:
-            self.drive.update()
-            self.flywheel.update()
-            self.range_finder.update()
-            self.show("11. Shooter distance", status + f"\nspinning up to {v:.0f} t/s: {self.flywheel.velocity:.0f}\n\nshare/back: stop the run")
-            if self.gamepad1.backWasPressed():
-                return False
-        return self.opModeIsActive()
-
-    def fire(self) -> float:
-        """Feed until one shot leaves. Returns the deepest flywheel dip seen
-        (fraction of prime); below SHOT_DIP means no shot was detected."""
+    def feed_for(self, ms: float, gated: bool, what: str) -> None:
+        """Run the shooter intake for ms. gated: only while the flywheel is at
+        FEED_GATE of its settled speed, as Main's burst does."""
+        self.drive.stop()
         self.feed_guard.rearm()
         t = ElapsedTime()
-        dip_ms = -1.0
-        deepest = 0.0
-        while self.opModeIsActive() and t.milliseconds() < self.SHOT_MAX_FEED_MS:
+        while self.opModeIsActive() and t.milliseconds() < ms:
             self.drive.update()
             self.flywheel.update()
-            dip = 1.0 - self.flywheel.velocity / max(self.flywheel.prime, 1.0)
-            deepest = max(deepest, dip)
-            if dip_ms < 0 and dip >= self.SHOT_DIP:
-                dip_ms = t.milliseconds()
-            if dip_ms >= 0 and t.milliseconds() - dip_ms > self.SHOT_AFTER_DIP_MS:
-                break
-            self.feed_guard.update(self.FEED_POWER)
-            self.show("11. Shooter distance", f"FIRING  {self.flywheel.velocity:.0f} t/s")
+            feed = self.FEED_POWER
+            if gated and self.flywheel.velocity < self.flywheel.prime * self.FEED_GATE:
+                feed = 0.0
+            self.feed_guard.update(feed)
+            self.show("11. Shooter distance", f"{what}  {(ms - t.milliseconds()) / 1000.0:.1f} s   flywheel {self.flywheel.velocity:.0f} t/s")
         self.feed_guard.update(0.0)
-        # Let the flywheel get its speed back before the next question page.
-        self.hold(300)
-        return deepest
 
-    def ask_shot(self, title: str, body: str) -> int:
-        """1 in, 2 missed, 3 shoot again, 4 skip, 5 stop the run (or STOP)."""
+    def ask_landed(self, title: str, body: str) -> int:
+        """1 in, 2 missed, 3 not counted (no ball came out, bad load...)."""
         self.drive.stop()
         self.gamepad1.resetEdgeDetection()
         while self.opModeIsActive():
             self.drive.update()
             self.flywheel.update()
-            self.show(title, body)
+            self.show(title, body + "\n\ncross/A: IN    circle/B: missed\ntriangle/Y: don't count it")
             if self.gamepad1.aWasPressed():
                 return 1
             if self.gamepad1.bWasPressed():
                 return 2
             if self.gamepad1.yWasPressed():
                 return 3
-            if self.gamepad1.xWasPressed():
-                return 4
-            if self.gamepad1.backWasPressed():
-                return 5
-        return 5
+        return 3
 
     def step_shooter(self) -> None:
         if not self.range_finder.present:
@@ -940,136 +897,146 @@ class Calibration(LinearOpMode):
             return
         if not self.shooter_setup():
             return
+        if self.sh_fresh:
+            # Only in memory: the file is overwritten when the first speed is saved.
+            self.shot_cal.reset()
+            self.sh_fresh = False
         # Shooter intake direction, same as Main's MagDump.
         self.collector.setDirection(DcMotorSimple.Direction.FORWARD)
         self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
-        session = ShooterCal()
-        session.interval_cm = self.sh_interval
-        stopped = self.shooter_run(session)
+        self.drive.start()
+        speeds = self.shooter_speeds()
+        saved = 0
+        k = 0
+        while self.opModeIsActive() and k < len(speeds):
+            r = self.shooter_speed(speeds, k)
+            if r == 1:
+                saved = saved + 1
+                k = k + 1
+            elif r == 2:
+                k = k + 1
+            elif r == 3:
+                k = max(0, k - 1)
+            else:
+                break
         self.flywheel.off()
         self.feed_guard.update(0.0)
         self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT)
-        if not self.opModeIsActive():
-            return
-        if session.count() == 0:
-            self.last_result = "Shooter distance: no shots recorded."
-            return
-        self.shooter_results(session, stopped)
+        self.drive.stop()
+        # Whatever was not saved (e.g. an unused "start fresh") goes back to the file.
+        self.shot_cal = ShooterCal()
+        self.shot_cal.load()
+        self.last_result = f"Shooter: {saved} speeds saved this run; table has {self.shot_cal.count()}."
 
-    def shooter_run(self, session: ShooterCal) -> bool:
-        """The grid itself. Returns True if it ended early."""
-        speeds = self.shooter_speeds()
-        away = -1.0 if self.sh_backward else 1.0
-        self.drive.start()
-        first_cm = -1.0
-        for stop in range(self.sh_stops):
-            if stop > 0:
-                self.flywheel.off()
-                self.show("11. Shooter distance", f"backing away {self.sh_interval:.0f} cm to stop {stop + 1} of {self.sh_stops}")
-                self.drive.drive_cm(self, away * self.sh_interval, 0.0, 0.35, 4.0)
-                self.drive.stop()
-                self.hold(300)
-            stop_cm = self.measure_cm(500.0)
-            if stop_cm < 0:
-                self.fail("No distance reading",
-                          f"{self.range_finder.describe()} at stop {stop + 1}.\n"
-                          "Is the sensor facing the wall, and within 2 m of it?")
-                return True
-            if stop == 0:
-                first_cm = stop_cm
-            elif stop == 1 and stop_cm - first_cm < 0.5 * self.sh_interval:
-                self.fail("Not getting farther",
-                          f"The robot moved {self.sh_interval:.0f} cm but the wall went\n"
-                          f"from {first_cm:.1f} to {stop_cm:.1f} cm. Either 'away' is the\n"
-                          "other direction (change it on the setup page) or the\n"
-                          "sensor is not looking at the wall.")
-                return True
-            for v in speeds:
-                result = self.shooter_shot(session, stop, v, stop_cm)
-                if result == 5:
-                    return True
-        return False
-
-    def shooter_shot(self, session: ShooterCal, stop: int, v: float, stop_cm: float) -> int:
-        """Fire at speed v until the driver records it or skips; returns the
-        answer (1 in, 2 missed, 4 skipped, 5 stop the run)."""
-        where = f"stop {stop + 1} of {self.sh_stops}, {stop_cm:.1f} cm from the wall"
+    def shooter_speed(self, speeds: list[float], k: int) -> int:
+        """Driver-controlled search for one speed's distance. Returns 1 saved,
+        2 next speed, 3 previous speed, 5 finish (share/back or STOP)."""
+        v = speeds[k]
+        self.flywheel.spin_velocity(v)
+        self.range_finder.clear()
+        streak = 0
+        streak_cm: list[float] = []
+        start_cm = -1.0
+        note = ""
+        self.gamepad1.resetEdgeDetection()
         while self.opModeIsActive():
-            if not self.spin_to(v, where):
+            self.drive.update()
+            self.flywheel.update()
+            self.range_finder.update()
+            self.drive.teleop_gamepad(self.gamepad1)
+            self.show_speed_page(speeds, k, streak, start_cm, note)
+            if self.gamepad1.dpadRightWasPressed():
+                return 2
+            if self.gamepad1.dpadLeftWasPressed():
+                return 3
+            if self.gamepad1.backWasPressed():
                 return 5
-            ready_page = (where + "\n"
-                          f"flywheel {self.flywheel.prime:.0f} t/s (target {v:.0f}, {self.flywheel.rpm(self.flywheel.prime):.0f} rpm)\n\n"
-                          "Load ONE ball.\n"
-                          "cross/A: fire   square/X: skip this speed   share/back: stop the run")
-            go = self.ask_shot("11. Ready to fire", ready_page)
-            if go == 5:
-                return 5
-            if go == 4:
-                return 4
-            if go != 1:
+            if not self.gamepad1.aWasPressed():
                 continue
-            # Distance at the moment of the shot: a recoil nudge between shots
-            # is then recorded instead of assumed away.
-            cm = self.measure_cm(200.0)
+            if not self.flywheel.ready:
+                note = "Wait for the flywheel to settle."
+                continue
+            self.drive.stop()
+            cm = self.measure_cm(250.0)
             if cm < 0:
-                cm = stop_cm
+                note = "No distance reading: is the sensor facing the wall?"
+                continue
+            if streak > 0 and abs(cm - start_cm) > self.MOVE_TOLERANCE_CM:
+                note = f"Moved {cm - start_cm:+.0f} cm: the streak restarts here."
+                streak = 0
+                streak_cm = []
+            if streak == 0:
+                start_cm = cm
             prime = self.flywheel.prime
-            dip = self.fire()
-            seen = f"shot seen (flywheel dipped {100.0 * dip:.0f}%)"
-            if dip < self.SHOT_DIP:
-                seen = "NO shot seen (no flywheel dip): if no ball left, shoot again"
-            answer = self.ask_shot("11. Did it go in?",
-                                   f"{cm:.1f} cm, {prime:.0f} t/s\n{seen}\n\n"
-                                   "cross/A: IN      circle/B: missed\n"
-                                   "triangle/Y: shoot again (not recorded)\n"
-                                   "square/X: skip this speed   share/back: stop the run")
-            if answer == 1 or answer == 2:
-                session.add(v, prime, cm, answer == 1)
-                return answer
-            if answer == 4 or answer == 5:
-                return answer
+            if streak < self.STREAK_NEEDED:
+                self.feed_for(self.SINGLE_FEED_MS, False, "FIRING 1 ball")
+                answer = self.ask_landed("11. Did it go in?", f"{v:.0f} t/s (settled {prime:.0f}), {cm:.1f} cm\nin a row so far: {streak}")
+                if answer == 1:
+                    streak = streak + 1
+                    streak_cm.append(cm)
+                    note = ""
+                elif answer == 2:
+                    streak = 0
+                    streak_cm = []
+                    note = "Missed: move if you want and try again."
+                else:
+                    note = "Not counted."
+            else:
+                self.feed_for(self.BURST_FEED_MS, True, f"BURST of {self.BURST_BALLS}")
+                answer = self.ask_landed(f"11. All {self.BURST_BALLS} in?", f"{v:.0f} t/s (settled {prime:.0f}), {cm:.1f} cm")
+                if answer == 1:
+                    streak_cm.append(cm)
+                    if self.save_speed(v, prime, RangeFinder.median(streak_cm)):
+                        return 1
+                    return 5
+                if answer == 2:
+                    streak = 0
+                    streak_cm = []
+                    note = "Burst missed: the streak restarts."
+                else:
+                    note = "Burst not counted: load 5 and fire again."
+            self.gamepad1.resetEdgeDetection()
         return 5
 
-    def shooter_results(self, session: ShooterCal, stopped: bool) -> None:
-        merged = ShooterCal()
-        if not self.sh_fresh:
-            for i in range(self.shot_cal.count()):
-                merged.add(self.shot_cal.shot_target[i], self.shot_cal.shot_tps[i], self.shot_cal.shot_cm[i], self.shot_cal.shot_hit[i])
-        for i in range(session.count()):
-            merged.add(session.shot_target[i], session.shot_tps[i], session.shot_cm[i], session.shot_hit[i])
-        merged.interval_cm = self.sh_interval
-        merged.build()
-        report = ""
-        if stopped:
-            report = "Run stopped early; the shots so far are below.\n"
-        report = report + f"{session.hits()} of {session.count()} shots went in this run.\n"
-        if not self.sh_fresh and self.shot_cal.count() > 0:
-            report = report + f"Table below includes the {self.shot_cal.count()} saved shots.\n"
-        report = report + "\nspeed t/s (got, rpm)   in/shots   scores at\n"
-        for k in range(len(merged.level_tps)):
-            line = f"{merged.level_target[k]:.0f} ({merged.level_tps[k]:.0f}, {self.flywheel.rpm(merged.level_tps[k]):.0f})   {merged.level_hits[k]}/{merged.level_shots[k]}   "
-            if merged.level_has_band[k]:
-                line = line + f"{merged.level_lo[k]:.0f}-{merged.level_hi[k]:.0f} cm"
-            else:
-                line = line + "never"
-            report = report + line + "\n"
-        if not self.ask("11. Shooter results", report + "\ncross/A: save    B: discard"):
-            self.last_result = "Shooter shots discarded."
-            return
-        if self.sh_fresh:
-            self.shot_cal.reset()
-        for i in range(session.count()):
-            self.shot_cal.add(session.shot_target[i], session.shot_tps[i], session.shot_cm[i], session.shot_hit[i])
-        self.shot_cal.interval_cm = self.sh_interval
+    def show_speed_page(self, speeds: list[float], k: int, streak: int, start_cm: float, note: str) -> None:
+        v = speeds[k]
+        lines: list[str] = []
+        state = f"settled {self.flywheel.prime:.0f} t/s ({self.flywheel.rpm(self.flywheel.prime):.0f} rpm)" if self.flywheel.ready else f"spinning up: {self.flywheel.velocity:.0f} t/s"
+        lines.append(f"flywheel {state}")
+        lines.append("distance " + self.range_finder.describe())
+        old = self.shot_cal.index_of(v)
+        if old >= 0:
+            lines.append(f"saved for this speed: {self.shot_cal.point_cm[old]:.1f} cm (would be replaced)")
+        lines.append("")
+        if streak == 0:
+            lines.append(f"Drive to a spot and fire. {self.STREAK_NEEDED} in a row needed.")
+        elif streak < self.STREAK_NEEDED:
+            lines.append(f"{streak} of {self.STREAK_NEEDED} in a row at {start_cm:.0f} cm. Stay within {self.MOVE_TOLERANCE_CM:.0f} cm.")
+        else:
+            lines.append(f"{self.STREAK_NEEDED} in a row! Load {self.BURST_BALLS} balls: next fire is the burst.")
+        if note != "":
+            lines.append(note)
+        lines.append("")
+        lines.append("left stick: move   right stick: turn")
+        lines.append("cross/A: fire" + (" the burst" if streak >= self.STREAK_NEEDED else " 1 ball"))
+        lines.append("dpad right/left: next/previous speed   share/back: finish")
+        self.telemetry.addLine(f"11. Shooter  speed {k + 1} of {len(speeds)}: {v:.0f} t/s")
+        for line in lines:
+            self.telemetry.addLine(line)
+        self.telemetry.update()
+
+    def save_speed(self, target: float, tps: float, cm: float) -> bool:
+        self.shot_cal.set_point(target, tps, cm)
         try:
             self.shot_cal.save()
         except RuntimeError as e:
             self.fail("Could not save", "Writing the shooter file failed:\n" + str(e))
-            return
+            return False
         check = ShooterCal()
         check.load()
-        if check.count() != self.shot_cal.count():
-            self.fail("Could not save", "The shooter file on the hub does not hold the shots after saving.")
-            return
-        self.sh_fresh = False
-        self.last_result = f"Shooter distance saved: {self.shot_cal.count()} shots, {len(self.shot_cal.level_tps)} speeds."
+        if check.index_of(target) < 0:
+            self.fail("Could not save", "The shooter file on the hub does not hold this speed after saving.")
+            return False
+        self.show("11. Saved", f"{target:.0f} t/s scores at {cm:.1f} cm.")
+        self.hold(1500)
+        return True
