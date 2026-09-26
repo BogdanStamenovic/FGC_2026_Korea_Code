@@ -42,6 +42,12 @@ class OmniDrive:
     # heading to hold is captured once it has (nearly) stopped.
     HOLD_CAPTURE_DPS: float = 15.0
     HOLD_CAPTURE_MAX_MS: float = 300.0
+    # Corrections (heading hold, drift feedforward) may take at most this much
+    # power away from the driver's command. They used to be mixed in before
+    # the wheels were scaled back to 1.0, so at full stick a 0.4 correction cut
+    # every wheel to 71%: the robot slowed down whenever it was knocked off
+    # its heading, which to the driver looked like random power drops.
+    CORRECTION_RESERVE: float = 0.1
     # Autonomous moves: power per cm (or per degree) of remaining error, on top
     # of the static-friction power that gets the robot moving at all.
     AUTO_KP_CM: float = 0.03
@@ -60,6 +66,10 @@ class OmniDrive:
     ROT: list[float]
     use_corrections: bool
     v_common: float
+    # What the last drive() did, for telemetry: the fraction of the driver's
+    # command that reached the wheels, and the correction that was applied.
+    last_output: float
+    last_correction: float
 
     last_raw_yaw: float
     unwrapped_yaw: float
@@ -93,6 +103,8 @@ class OmniDrive:
         self.imu = hw.get(IMU, "imu")
         self.use_corrections = True
         self.v_common = self.common_speed()
+        self.last_output = 1.0
+        self.last_correction = 0.0
         self.hold_enabled = True
         self.hold_active = False
         self.hold_target = 0.0
@@ -267,15 +279,38 @@ class OmniDrive:
                 m.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
 
     def drive(self, fwd: float, strafe: float, rot: float) -> None:
+        self.drive_corrected(fwd, strafe, rot, 0.0)
+
+    def drive_corrected(self, fwd: float, strafe: float, rot: float, correction: float) -> None:
+        """fwd/strafe/rot: what the driver (or autonomous) asked for; if the
+        wheels saturate it is scaled as a whole, so the direction is kept.
+        correction: extra rotation (heading hold); it only gets the power the
+        command leaves free, plus at most CORRECTION_RESERVE taken from it."""
         if self.use_corrections:
-            rot = rot + self.cal.drift_fwd * fwd + self.cal.drift_str * strafe
+            correction = correction + self.cal.drift_fwd * fwd + self.cal.drift_str * strafe
         w: list[float] = []
         biggest = 1.0
         for i in range(4):
             w.append(self.FWD[i] * fwd + self.STR[i] * strafe + self.ROT[i] * rot)
             biggest = max(biggest, abs(w[i]))
+        peak = 0.0
         for i in range(4):
-            self.set_raw(i, self.wheel_power(i, w[i] / biggest))
+            w[i] = w[i] / biggest
+            peak = max(peak, abs(w[i]))
+        scale = 1.0 / biggest
+        reserve = min(abs(correction), self.CORRECTION_RESERVE)
+        if peak > 1.0 - reserve:
+            shrink = (1.0 - reserve) / peak
+            for i in range(4):
+                w[i] = w[i] * shrink
+            scale = scale * shrink
+            peak = 1.0 - reserve
+        room = 1.0 - peak
+        correction = Range.clip(correction, -room, room)
+        for i in range(4):
+            self.set_raw(i, self.wheel_power(i, w[i] + self.ROT[i] * correction))
+        self.last_output = scale
+        self.last_correction = correction
 
     # ------------------------------------------------------------------ heading hold
 
@@ -300,6 +335,7 @@ class OmniDrive:
         the robot is being driven (so a parked robot doesn't fight a push)."""
         moving = abs(fwd) > self.STICK_DEADBAND or abs(strafe) > self.STICK_DEADBAND
         rot = turn
+        correction = 0.0
         if abs(turn) > self.STICK_DEADBAND:
             self.hold_active = False
             self.turn_release.reset()
@@ -312,11 +348,10 @@ class OmniDrive:
                 if settled or self.turn_release.milliseconds() > self.HOLD_CAPTURE_MAX_MS:
                     self.hold_target = self.heading_deg
                     self.hold_active = True
+            rot = 0.0
             if self.hold_active:
-                rot = self.heading_correction(self.hold_target)
-            else:
-                rot = 0.0
-        self.drive(fwd, strafe, rot)
+                correction = self.heading_correction(self.hold_target)
+        self.drive_corrected(fwd, strafe, rot, correction)
 
     def teleop_gamepad(self, gp: Gamepad) -> None:
         """The driver's sticks, in one place for Main and Calibration: left

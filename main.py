@@ -8,10 +8,6 @@ Controls, all on gamepad 1:
   right stick X       turn
   options             heading hold on/off (on at start; 1 rumble = on, 2 = off)
   cross               MagDump: off -> spin up shooter -> shoot -> off
-                      While spun up, the gamepad rumbles as long as the robot
-                      is at a distance the shooter calibration says scores at
-                      this flywheel speed: that is the moment to press cross.
-                      The rumble is advice only; cross shoots from anywhere.
   circle              BallPickup on/off
                       (MagDump and BallPickup share the Collector motor: while
                       one is on, the other's button only rumbles)
@@ -28,14 +24,12 @@ calibration file it still drives, uncorrected, and says so on telemetry.
 # ── pyftc:config name="FGC2026-Incheon" fingerprint="c841abeba9d5c0ab" generated="2026-09-20" ──
 
 # ── pyftc:imports ──
-from ftc.hardware import CRServo, DcMotor, DcMotorEx, DcMotorSimple, DistanceSensor, Servo
+from ftc.hardware import CRServo, DcMotor, DcMotorEx, DcMotorSimple, Servo, VoltageSensor
 from ftc.opmode import LinearOpMode, TeleOp
 from ftc.util import ElapsedTime
 from drive import OmniDrive
 from drive_cal import DriveCal
 from jam import JamGuard
-from shooter import Flywheel, RangeFinder
-from shooter_cal import ShooterCal
 # ── pyftc:imports:end ──
 
 
@@ -90,25 +84,22 @@ class Main(LinearOpMode):
     PICKUP_POWER: float = 1.0
     # Feed only while the flywheel is at >= 90% of its settled speed.
     FEED_GATE: float = 0.9
-    # Rumble renewed every RUMBLE_EVERY_MS for RUMBLE_MS: a continuous buzz
-    # that dies by itself within RUMBLE_MS once out of range.
-    RUMBLE_MS: int = 300
-    RUMBLE_EVERY_MS: float = 250.0
+    # The flywheel counts as settled when its speed changed by less than 2%
+    # over 200 ms; after 2.5 s it counts as settled regardless.
+    FLY_PLATEAU_MS: float = 200.0
+    FLY_PLATEAU_FRACTION: float = 0.02
+    FLY_SPINUP_TIMEOUT_MS: float = 2500.0
+    FLY_MIN_TPS: float = 300.0
     CHAIN_DROP_START: float = 0.0
     CHAIN_DROP_FISHING: float = 0.25
     CHAIN_STOP_START: float = 0.7
     CHAIN_STOP_ENGAGED: float = 0.4
     FIXATOR_POWER: float = -1.0
     FIXATOR_MS: float = 1000.0
+    VOLTS_EVERY_MS: float = 250.0
 
     cal: DriveCal
     drive: OmniDrive
-    flywheel: Flywheel
-    range_finder: RangeFinder
-    shot_cal: ShooterCal
-    in_range: bool
-    has_band: bool
-    next_rumble_ms: float
     feed_guard: JamGuard
     pickup_guard: JamGuard
     clock: ElapsedTime
@@ -118,9 +109,26 @@ class Main(LinearOpMode):
     # Who has the Collector motor: "Free", "MagDump" or "BallPickup".
     in_use: str
     mag_status: str
+    fly_velocity: float
+    fly_ref_velocity: float
+    fly_ref_ms: float
+    fly_start_ms: float
+    fly_ready: bool
+    prime_velocity: float
     entered_fishing: bool
     fixator_used: bool
     fixator_until_ms: float
+    # Loop time and battery, shown so a lagging robot or a power drop can be
+    # told apart from a code problem: slow loop = code, low volts = battery.
+    batteries: list[VoltageSensor]
+    volts: float
+    volts_low: float
+    volts_ms: float
+    last_loop_ms: float
+    loop_ms: float
+    loop_worst: float
+    loop_worst_shown: float
+    loop_window_ms: float
 
     def runOpMode(self) -> None:
         # ── On ready: runs once when INIT is pressed ──
@@ -140,14 +148,18 @@ class Main(LinearOpMode):
         self.drive.init_imu()
         self.feed_guard = JamGuard("shooter intake", self.collector)
         self.pickup_guard = JamGuard("ball pickup", self.collector)
-        self.flywheel = Flywheel(self.shooter)
-        # tryGet: without the sensor configured Main must still run, minus the rumble.
-        self.range_finder = RangeFinder(self.hardwareMap.tryGet(DistanceSensor, RangeFinder.NAME))
-        self.shot_cal = ShooterCal()
-        self.shot_cal.load()
-        self.in_range = False
-        self.has_band = False
-        self.next_rumble_ms = 0.0
+        # Set explicitly: a motor's run mode survives from the last OpMode
+        # that used it, and FLYWHEEL_POWER means raw power, not a velocity.
+        self.shooter.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER)
+        self.batteries = self.hardwareMap.getAll(VoltageSensor)
+        self.volts = 0.0
+        self.volts_low = 99.0
+        self.volts_ms = -1.0e9
+        self.last_loop_ms = 0.0
+        self.loop_ms = 0.0
+        self.loop_worst = 0.0
+        self.loop_worst_shown = 0.0
+        self.loop_window_ms = 0.0
         self.fishing.setDirection(DcMotorSimple.Direction.REVERSE)
         self.fishing.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
 
@@ -158,6 +170,9 @@ class Main(LinearOpMode):
         self.climb_button = Cycle(2)
         self.in_use = "Free"
         self.mag_status = "off"
+        self.fly_velocity = 0.0
+        self.fly_ready = False
+        self.prime_velocity = 0.0
         self.entered_fishing = False
         self.fixator_used = False
         self.fixator_until_ms = 0.0
@@ -165,7 +180,6 @@ class Main(LinearOpMode):
 
         self.telemetry.addLine("Ready. Press START.")
         self.telemetry.addLine(self.calibration_line())
-        self.telemetry.addLine(self.shooter_table_line())
         self.telemetry.update()
         self.waitForStart()
 
@@ -176,10 +190,10 @@ class Main(LinearOpMode):
         self.clock.reset()
         while self.opModeIsActive():
             now = self.clock.milliseconds()
+            self.update_health(now)
             self.update_drive()
             self.update_buttons(now)
             self.update_mag_dump(now)
-            self.update_range_rumble(now)
             self.update_ball_pickup()
             self.update_fishing()
             self.update_climb()
@@ -226,26 +240,30 @@ class Main(LinearOpMode):
         if phase == 1 and self.in_use == "Free":
             self.collector.setDirection(DcMotorSimple.Direction.FORWARD)
             self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
-            self.flywheel.spin_power(self.FLYWHEEL_POWER)
+            self.shooter.setPower(self.FLYWHEEL_POWER)
             self.feed_guard.rearm()
-            self.range_finder.clear()
+            self.fly_ready = False
+            self.fly_start_ms = now
+            self.fly_ref_ms = now
+            self.fly_ref_velocity = 0.0
             self.in_use = "MagDump"
         elif phase == 0 and self.in_use == "MagDump":
             self.feed_guard.update(0.0)
             self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT)
-            self.flywheel.off()
+            self.shooter.setPower(0.0)
             self.in_use = "Free"
             self.mag_status = "off"
         if self.in_use != "MagDump":
             return
 
-        self.flywheel.update()
+        self.fly_velocity = abs(self.shooter.getVelocity())
+        self.track_flywheel(now)
         feed = 0.0
         if phase < 2:
-            self.mag_status = "flywheel ready" if self.flywheel.ready else "spinning up"
-        elif not self.flywheel.ready:
+            self.mag_status = "flywheel ready" if self.fly_ready else "spinning up"
+        elif not self.fly_ready:
             self.mag_status = "shoot pressed, waiting for flywheel"
-        elif self.flywheel.velocity < self.flywheel.prime * self.FEED_GATE:
+        elif self.fly_velocity < self.prime_velocity * self.FEED_GATE:
             self.mag_status = "flywheel recovering"
         else:
             feed = self.FEED_POWER
@@ -254,26 +272,24 @@ class Main(LinearOpMode):
         if self.feed_guard.just_faulted():
             self.gamepad1.rumbleBlips(3)
 
-    def update_range_rumble(self, now: float) -> None:
-        """While spun up and waiting (phase 1), rumble for as long as the
-        distance is inside the band the shooter table gives for this prime."""
-        band = False
-        inside = False
-        if self.in_use == "MagDump":
-            self.range_finder.update()
-            if self.flywheel.ready:
-                band = self.shot_cal.band_for(self.flywheel.prime)
-            if band and self.mag_button.phase == 1 and self.range_finder.valid():
-                d = self.range_finder.cm()
-                inside = d >= self.shot_cal.found_lo and d <= self.shot_cal.found_hi
-        if inside and now >= self.next_rumble_ms:
-            self.gamepad1.rumble(1.0, 1.0, self.RUMBLE_MS)
-            self.next_rumble_ms = now + self.RUMBLE_EVERY_MS
-        if self.in_range and not inside:
-            self.gamepad1.stopRumble()
-            self.next_rumble_ms = 0.0
-        self.has_band = band
-        self.in_range = inside
+    def track_flywheel(self, now: float) -> None:
+        """Latch prime_velocity once the flywheel stops speeding up. Sampling it
+        at the moment of the shoot press gave a too-low prime when the press
+        came early, and the feed gate then let slow shots through."""
+        if self.fly_ready:
+            return
+        if now - self.fly_start_ms > self.FLY_SPINUP_TIMEOUT_MS:
+            self.fly_ready = True
+            self.prime_velocity = self.fly_velocity
+            return
+        if now - self.fly_ref_ms < self.FLY_PLATEAU_MS:
+            return
+        change = abs(self.fly_velocity - self.fly_ref_velocity)
+        if self.fly_velocity > self.FLY_MIN_TPS and change < self.FLY_PLATEAU_FRACTION * self.fly_velocity:
+            self.fly_ready = True
+            self.prime_velocity = self.fly_velocity
+        self.fly_ref_velocity = self.fly_velocity
+        self.fly_ref_ms = now
 
     # ------------------------------------------------------------------ pickup
 
@@ -328,6 +344,25 @@ class Main(LinearOpMode):
 
     # ------------------------------------------------------------------ telemetry
 
+    def update_health(self, now: float) -> None:
+        self.loop_ms = now - self.last_loop_ms
+        self.last_loop_ms = now
+        self.loop_worst = max(self.loop_worst, self.loop_ms)
+        if now - self.loop_window_ms > 1000.0:
+            self.loop_worst_shown = self.loop_worst
+            self.loop_worst = 0.0
+            self.loop_window_ms = now
+        # Every hub reports the same battery; each read is its own hub command,
+        # so a few per second is enough.
+        if now - self.volts_ms >= self.VOLTS_EVERY_MS:
+            self.volts_ms = now
+            v = 99.0
+            for b in self.batteries:
+                v = min(v, b.getVoltage())
+            if v < 99.0:
+                self.volts = v
+                self.volts_low = min(self.volts_low, v)
+
     def calibration_line(self) -> str:
         if self.cal.load_error != "":
             return "Drive: " + self.cal.load_error
@@ -335,26 +370,22 @@ class Main(LinearOpMode):
             return "Drive: UNCALIBRATED - run the Calibration OpMode"
         return f"Drive: calibrated ({self.cal.done_count()} of 8 steps)"
 
-    def shooter_table_line(self) -> str:
-        if self.shot_cal.load_error != "":
-            return "Shooter: " + self.shot_cal.load_error
-        if not self.range_finder.present:
-            return "Shooter: " + self.range_finder.describe() + ", no range rumble"
-        if self.shot_cal.count() == 0:
-            return "Shooter: not calibrated (Calibration step 11), no range rumble"
-        return f"Shooter: distances for {self.shot_cal.count()} speeds"
-
     def show_status(self) -> None:
         hold = "ON" if self.drive.hold_enabled else "off"
         if not self.cal.has("ramp"):
             hold = "unavailable until Calibration step 5"
         self.telemetry.addLine(self.calibration_line())
         self.telemetry.addData("Heading", f"{self.drive.heading():.1f} deg, hold {hold}")
+        out = f"{100.0 * self.drive.last_output:.0f}% of stick"
+        if abs(self.drive.last_correction) > 0.005:
+            out = out + f", heading correction {self.drive.last_correction:+.2f}"
+        self.telemetry.addData("Drive output", out)
+        self.telemetry.addData("Battery", f"{self.volts:.2f} V (lowest {self.volts_low:.2f} V)")
+        self.telemetry.addData("Loop", f"{self.loop_ms:.0f} ms (worst in last s: {self.loop_worst_shown:.0f} ms)")
         self.telemetry.addData("Mode", self.in_use)
         if self.in_use == "MagDump":
             self.telemetry.addData("MagDump", self.mag_status)
-            self.telemetry.addData("Flywheel", f"{self.flywheel.velocity:.0f} t/s, prime {self.flywheel.prime:.0f}")
-            self.telemetry.addData("Range", self.range_line())
+            self.telemetry.addData("Flywheel", f"{self.fly_velocity:.0f} t/s, prime {self.prime_velocity:.0f}")
             self.telemetry.addData("Shooter intake", self.feed_guard.status())
         if self.in_use == "BallPickup":
             self.telemetry.addData("Ball pickup", self.pickup_guard.status())
@@ -365,14 +396,3 @@ class Main(LinearOpMode):
             self.telemetry.addLine("Fishing mode entered")
         if self.fixator_used:
             self.telemetry.addLine("Fixator released")
-
-    def range_line(self) -> str:
-        text = self.range_finder.describe()
-        if not self.range_finder.present or not self.flywheel.ready:
-            return text
-        if not self.has_band:
-            return text + f", no scoring band for {self.flywheel.prime:.0f} t/s"
-        text = text + f", scores at {self.shot_cal.found_cm:.0f} +-{self.shot_cal.TOLERANCE_CM:.0f} cm"
-        if self.in_range:
-            text = text + "  IN RANGE"
-        return text
