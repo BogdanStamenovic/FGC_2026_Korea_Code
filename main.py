@@ -72,8 +72,9 @@ class Cycle:
 @TeleOp(name="Main", group="pyftc")
 class Main(LinearOpMode):
     # ── pyftc:devices ──
-    # "Collector" is both the ball collector (FORWARD) and the shooter
-    # intake (REVERSE); the drive motors and the IMU live in OmniDrive.
+    # "Collector" is both the ball collector (REVERSE) and the shooter
+    # intake (FORWARD): the motor is mounted the other way round since 26 Sep.
+    # The drive motors and the IMU live in OmniDrive.
     collector: DcMotorEx
     shooter: DcMotorEx
     climber: DcMotor
@@ -133,7 +134,6 @@ class Main(LinearOpMode):
         self.fixator_release = self.hardwareMap.get(CRServo, "FixatorRelease")
         self.climb_upper = self.hardwareMap.get(CRServo, "ClimbUpper")
         # ── pyftc:init:end ──
-
         self.cal = DriveCal()
         self.cal.load()
         self.drive = OmniDrive(self.hardwareMap, self.cal)
@@ -226,7 +226,7 @@ class Main(LinearOpMode):
     def update_mag_dump(self, now: float) -> None:
         phase = self.mag_button.phase
         if phase == 1 and self.in_use == "Free":
-            self.collector.setDirection(DcMotorSimple.Direction.REVERSE)
+            self.collector.setDirection(DcMotorSimple.Direction.FORWARD)
             self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
             self.flywheel.spin_power(self.FLYWHEEL_POWER)
             self.feed_guard.rearm()
@@ -282,7 +282,7 @@ class Main(LinearOpMode):
     def update_ball_pickup(self) -> None:
         phase = self.pickup_button.phase
         if phase == 1 and self.in_use == "Free":
-            self.collector.setDirection(DcMotorSimple.Direction.FORWARD)
+            self.collector.setDirection(DcMotorSimple.Direction.REVERSE)
             self.pickup_guard.rearm()
             self.in_use = "BallPickup"
         elif phase == 0 and self.in_use == "BallPickup":

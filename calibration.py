@@ -940,7 +940,8 @@ class Calibration(LinearOpMode):
             return
         if not self.shooter_setup():
             return
-        self.collector.setDirection(DcMotorSimple.Direction.REVERSE)
+        # Shooter intake direction, same as Main's MagDump.
+        self.collector.setDirection(DcMotorSimple.Direction.FORWARD)
         self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
         session = ShooterCal()
         session.interval_cm = self.sh_interval
