@@ -30,13 +30,16 @@ Until step 5 (Turn ramp) is saved, heading hold stays off: which way the
 robot turns for +rotation is only known once it has been measured, and a
 wrong guess would make heading hold spin the robot.
 
-## Controls and manual mode
+## Controls, climbing mode and manual mode
 
-The full list is at the top of `main.py`. ClimbUpper goes up on triangle until
-the `climbLimit` magnetic switch (configure it as a Digital Device, or as a
-REV Touch Sensor, under that name; without it triangle stops after 5 s). The
-Climber motor has ClimbUpper's old controls: dpad left for up/down, left
-trigger for power. The fixator is on share.
+The full list is at the top of `main.py`. Share switches climbing mode on
+and off. In it, driving works as usual, the shooter and pickup are off, and:
+bumpers raise and triggers lower ClimbUpper (left) and SecondClimbUpper
+(right, configured as a CR servo named `SecondClimbUpper`), options runs the
+fixator release for 1 s per press, dpad down/up move the chain (the first
+dpad down also drops it), L3 engages/releases the chain brake, and square
+hands the left stick to the Climber motor instead of the drive. None of it
+exists outside climbing mode.
 
 The first touch on gamepad 2 switches to manual mode for the rest of the
 match: gamepad 2 takes over with the same layout and gamepad 1 is ignored.

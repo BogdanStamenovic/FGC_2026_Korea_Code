@@ -11,19 +11,26 @@ Controls, on gamepad 1:
   circle              BallPickup on/off
                       (MagDump and BallPickup share the Collector motor: while
                       one is on, the other's button only rumbles)
-  dpad down / up      fishing out / in (dpad down also drops the chain)
-  left bumper         chain stop (once fishing has started)
-  triangle            ClimbUpper up until the climbLimit switch; press again to stop
-  dpad left           Climber direction: up / down (starts down)
-  left trigger        Climber power
-  share               fixator release (once per match)
+  share               climbing mode on/off (1 rumble = on, 2 = off)
+
+In climbing mode, driving works the same, the shooter and pickup are off
+(entering it stops them), and:
+  left bumper / left trigger     ClimbUpper up / down
+  right bumper / right trigger   SecondClimbUpper up / down
+                                 (bumpers full power, triggers as far as pressed)
+  options             fixator release, 1 s per press, as often as needed
+  dpad down / up      chain down / up (the first dpad down also drops the chain)
+  L3                  chain brake: engage / release, each press
+  square              the left stick (up/down) runs the Climber motor instead
+                      of driving; press again to drive
+None of these exist outside climbing mode. Leaving it stops every climbing
+motor; the chain brake stays where it is.
 
 MANUAL MODE: the first time anything on gamepad 2 is touched, gamepad 2 takes
 over for the rest of the match and gamepad 1 is ignored. Same layout, but
 nothing is automatic except the collector's unjamming: no heading hold, no
-calibration corrections, the shooter feeds the moment shoot is pressed, and
-ClimbUpper runs while triangle (up) or square (down) is held, switch ignored.
-The Climber works the same in both modes.
+calibration corrections, and the shooter feeds the moment shoot is pressed.
+Climbing mode works the same on gamepad 2.
 
 Driving uses the Calibration OpMode's measurements (drive.py); without a
 calibration file it still drives, uncorrected, and says so on telemetry.
@@ -37,7 +44,7 @@ IMU only when heading hold can use it, and builds telemetry 10 times a second.
 # ── pyftc:config name="FGC2026-Incheon" fingerprint="c841abeba9d5c0ab" generated="2026-09-20" ──
 
 # ── pyftc:imports ──
-from ftc.hardware import CRServo, DcMotor, DcMotorEx, DcMotorSimple, DigitalChannel, Gamepad, LynxModule, Servo, TouchSensor, VoltageSensor
+from ftc.hardware import CRServo, DcMotor, DcMotorEx, DcMotorSimple, Gamepad, LynxModule, Servo, VoltageSensor
 from ftc.opmode import LinearOpMode, TeleOp
 from ftc.util import ElapsedTime
 from drive import OmniDrive
@@ -113,15 +120,14 @@ class Main(LinearOpMode):
     CHAIN_DROP_FISHING: float = 0.25
     CHAIN_STOP_START: float = 0.7
     CHAIN_STOP_ENGAGED: float = 0.4
-    FIXATOR_POWER: float = -1.0
+    FIXATOR_POWER: float = 1.0
     FIXATOR_MS: float = 1000.0
-    # Climber: + power = up, as ClimbUpper's FORWARD was "UP" before.
+    # The power that moves each climbing part up (flip a sign if one runs
+    # the wrong way). The Climber's is applied to the left stick pushed up.
     CLIMBER_UP: float = 1.0
-    # ClimbUpper: + power = up. It stops at the switch, or after
-    # CLIMB_UP_TIMEOUT_MS in case the switch never triggers.
-    CLIMB_LIMIT_NAME: str = "climbLimit"
-    CLIMB_POWER: float = 1.0
-    CLIMB_UP_TIMEOUT_MS: float = 5000.0
+    CLIMB_POWER: float = -1.0
+    SECOND_CLIMB_NAME: str = "SecondClimbUpper"
+    SECOND_CLIMB_POWER: float = -1.0
     # How far a gamepad 2 stick or trigger must move to count as "in use".
     PAD2_TOUCH: float = 0.3
     VOLTS_EVERY_MS: float = 500.0
@@ -135,8 +141,6 @@ class Main(LinearOpMode):
     hubs: list[LynxModule]
     mag_button: Cycle
     pickup_button: Cycle
-    climb_button: Cycle
-    climber_button: Cycle
     # The gamepad in charge: gamepad1, or gamepad2 once manual mode latched.
     pad: Gamepad
     manual: bool
@@ -150,15 +154,20 @@ class Main(LinearOpMode):
     fly_ready: bool
     prime_velocity: float
     entered_fishing: bool
-    fixator_used: bool
     fixator_until_ms: float
-    # The magnetic limit switch, configured either as a digital device or as
-    # a touch sensor; None if it is not in the configuration.
-    climb_limit_dc: DigitalChannel
-    climb_limit_touch: TouchSensor
-    climbing: bool
-    climb_since_ms: float
-    climb_status: str
+    # None if "SecondClimbUpper" is not in the hub configuration.
+    second_climb: CRServo
+    climb_mode: bool
+    climber_sticks: bool
+    brake_engaged: bool
+    # This loop's button presses. Every *WasPressed() is read once per loop,
+    # whatever the mode: an unread press would otherwise wait and fire later,
+    # e.g. an options press from driving releasing the fixator on entering
+    # climbing mode.
+    press_share: bool
+    press_options: bool
+    press_l3: bool
+    press_square: bool
     # Loop time and battery, shown so a lagging robot or a power drop can be
     # told apart from a code problem: slow loop = code, low volts = battery.
     batteries: list[VoltageSensor]
@@ -201,11 +210,10 @@ class Main(LinearOpMode):
         # that used it, and FLYWHEEL_POWER means raw power, not a velocity.
         self.shooter.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER)
         self.climb_upper.setDirection(DcMotorSimple.Direction.FORWARD)
+        self.second_climb = self.hardwareMap.tryGet(CRServo, self.SECOND_CLIMB_NAME)
+        if self.second_climb is not None:
+            self.second_climb.setDirection(DcMotorSimple.Direction.FORWARD)
         self.climber.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
-        self.climb_limit_dc = self.hardwareMap.tryGet(DigitalChannel, self.CLIMB_LIMIT_NAME)
-        self.climb_limit_touch = self.hardwareMap.tryGet(TouchSensor, self.CLIMB_LIMIT_NAME)
-        if self.climb_limit_dc is not None:
-            self.climb_limit_dc.setMode(DigitalChannel.Mode.INPUT)
         self.batteries = self.hardwareMap.getAll(VoltageSensor)
         self.volts = 0.0
         self.volts_low = 99.0
@@ -223,8 +231,6 @@ class Main(LinearOpMode):
         # against the buttons' debounce.
         self.mag_button = Cycle(3)
         self.pickup_button = Cycle(2)
-        self.climb_button = Cycle(2)
-        self.climber_button = Cycle(2)
         self.pad = self.gamepad1
         self.manual = False
         self.in_use = "Free"
@@ -233,16 +239,20 @@ class Main(LinearOpMode):
         self.fly_ready = False
         self.prime_velocity = 0.0
         self.entered_fishing = False
-        self.fixator_used = False
         self.fixator_until_ms = 0.0
-        self.climbing = False
-        self.climb_since_ms = 0.0
-        self.climb_status = "stopped"
+        self.climb_mode = False
+        self.climber_sticks = False
+        self.brake_engaged = False
+        self.press_share = False
+        self.press_options = False
+        self.press_l3 = False
+        self.press_square = False
         self.clock = ElapsedTime()
 
         self.telemetry.addLine("Ready. Press START.")
         self.telemetry.addLine(self.calibration_line())
-        self.telemetry.addLine(self.limit_line())
+        if self.second_climb is None:
+            self.telemetry.addLine(f"No '{self.SECOND_CLIMB_NAME}' in the configuration: right bumper/trigger do nothing")
         self.telemetry.update()
         self.waitForStart()
 
@@ -257,14 +267,12 @@ class Main(LinearOpMode):
             now = self.clock.milliseconds()
             self.update_health(now)
             self.check_manual()
+            self.read_presses()
+            self.update_climbing(now)
             self.update_drive()
             self.update_buttons(now)
             self.update_mag_dump(now)
             self.update_ball_pickup()
-            self.update_fishing()
-            self.update_climb(now)
-            self.update_climber(now)
-            self.update_fixator(now)
             if now - self.telemetry_ms >= self.TELEMETRY_EVERY_MS:
                 self.telemetry_ms = now
                 self.show_status()
@@ -285,9 +293,6 @@ class Main(LinearOpMode):
         self.gamepad2.resetEdgeDetection()
         self.mag_button.was_down = True
         self.pickup_button.was_down = True
-        self.climb_button.was_down = True
-        self.climber_button.was_down = True
-        self.climbing = False
         self.gamepad2.rumbleBlips(2)
 
     def touched(self, g: Gamepad) -> bool:
@@ -304,8 +309,17 @@ class Main(LinearOpMode):
 
     # ------------------------------------------------------------------ drive
 
+    def read_presses(self) -> None:
+        self.press_share = self.pad.backWasPressed()
+        self.press_options = self.pad.optionsWasPressed()
+        self.press_l3 = self.pad.leftStickButtonWasPressed()
+        self.press_square = self.pad.squareWasPressed()
+
     def update_drive(self) -> None:
-        if not self.manual and self.pad.optionsWasPressed():
+        if self.climb_mode and self.climber_sticks:
+            self.drive.drive(0.0, 0.0, 0.0)
+            return
+        if not self.manual and not self.climb_mode and self.press_options:
             self.drive.hold_enabled = not self.drive.hold_enabled
             if self.drive.hold_enabled:
                 self.pad.rumbleBlips(1)
@@ -323,12 +337,16 @@ class Main(LinearOpMode):
         # A mode button only steps its phase while its mode may run; otherwise
         # the press used to be remembered and fire later, e.g. the shooter
         # spinning up by itself the moment BallPickup was switched off.
-        if self.mag_button.pressed(self.pad.cross, now):
+        mag = self.mag_button.pressed(self.pad.cross, now)
+        pickup = self.pickup_button.pressed(self.pad.circle, now)
+        if self.climb_mode:
+            return
+        if mag:
             if self.in_use == "BallPickup":
                 self.pad.rumble(150)
             else:
                 self.mag_button.advance()
-        if self.pickup_button.pressed(self.pad.circle, now):
+        if pickup:
             if self.in_use == "MagDump":
                 self.pad.rumble(150)
             else:
@@ -416,84 +434,64 @@ class Main(LinearOpMode):
             if self.pickup_guard.just_faulted():
                 self.pad.rumbleBlips(3)
 
-    # ------------------------------------------------------------------ fishing, climb, fixator
+    # ------------------------------------------------------------------ climbing mode
 
-    def update_fishing(self) -> None:
-        if self.pad.dpad_down:
-            self.chain_drop.setPosition(self.CHAIN_DROP_FISHING)
-            self.entered_fishing = True
-            self.fishing.setPower(1.0)
-        elif self.pad.dpad_up:
-            self.fishing.setPower(-1.0)
-        else:
-            self.fishing.setPower(0.0)
-        # Read every loop so a press made before fishing started is not
-        # remembered and applied later.
-        bumper = self.pad.leftBumperWasPressed()
-        if bumper and self.entered_fishing:
-            self.chain_stop.setPosition(self.CHAIN_STOP_ENGAGED)
-
-    def at_top(self) -> bool:
-        # REV's magnetic limit switch pulls its line low with the magnet near:
-        # getState() False as a digital device, isPressed() True as a touch sensor.
-        if self.climb_limit_dc is not None:
-            return not self.climb_limit_dc.getState()
-        if self.climb_limit_touch is not None:
-            return self.climb_limit_touch.isPressed()
-        return False
-
-    def update_climb(self, now: float) -> None:
-        if self.manual:
-            power = 0.0
-            if self.pad.triangle:
-                power = self.CLIMB_POWER
-            elif self.pad.square:
-                power = -self.CLIMB_POWER
-            self.climb_upper.setPower(power)
-            self.climb_status = "manual"
-            return
-        if self.climb_button.pressed(self.pad.triangle, now):
-            if self.climbing:
-                self.climbing = False
-                self.climb_status = "stopped by driver"
-            elif self.at_top():
-                self.climb_status = "already up"
-                self.pad.rumble(150)
+    def update_climbing(self, now: float) -> None:
+        if self.press_share:
+            self.climb_mode = not self.climb_mode
+            if self.climb_mode:
+                # Phase 0 makes MagDump/BallPickup switch themselves off this loop.
+                self.mag_button.phase = 0
+                self.pickup_button.phase = 0
+                self.pad.rumbleBlips(1)
             else:
-                self.climbing = True
-                self.climb_since_ms = now
-                self.climb_status = "going up"
-        if self.climbing:
-            if self.at_top():
-                self.climbing = False
-                self.climb_status = "UP (switch)"
-            elif now - self.climb_since_ms > self.CLIMB_UP_TIMEOUT_MS:
-                self.climbing = False
-                self.climb_status = "stopped: switch not reached in time"
-        self.climb_upper.setPower(self.CLIMB_POWER if self.climbing else 0.0)
-
-    def update_climber(self, now: float) -> None:
-        """ClimbUpper's old controls, now on the Climber motor. The direction
-        is a sign on the power instead of setDirection every loop."""
-        if self.climber_button.pressed(self.pad.dpad_left, now):
-            self.climber_button.advance()
-        way = self.CLIMBER_UP if self.climber_button.phase == 1 else -self.CLIMBER_UP
-        self.climber.setPower(way * self.pad.left_trigger)
-
-    def fixator_pressed(self) -> bool:
-        # The SDK's name for share is back (PS share = Xbox back).
-        return self.pad.back
-
-    def update_fixator(self, now: float) -> None:
-        # Timed instead of sleep(1000): sleeping froze the loop, and the drive
-        # motors kept their last power for that second.
-        if self.fixator_pressed() and not self.fixator_used:
-            self.fixator_used = True
-            self.fixator_until_ms = now + self.FIXATOR_MS
-            self.fixator_release.setPower(self.FIXATOR_POWER)
+                self.stop_climbing()
+                self.pad.rumbleBlips(2)
+        # A fixator release started in climbing mode still ends on time.
         if self.fixator_until_ms > 0 and now >= self.fixator_until_ms:
             self.fixator_release.setPower(0.0)
             self.fixator_until_ms = 0.0
+        if not self.climb_mode:
+            return
+        g = self.pad
+        if self.press_square:
+            self.climber_sticks = not self.climber_sticks
+        if self.press_l3:
+            self.brake_engaged = not self.brake_engaged
+            self.chain_stop.setPosition(self.CHAIN_STOP_ENGAGED if self.brake_engaged else self.CHAIN_STOP_START)
+        if self.press_options:
+            self.fixator_until_ms = now + self.FIXATOR_MS
+            self.fixator_release.setPower(self.FIXATOR_POWER)
+        self.climb_upper.setPower(self.climb_power(g.left_bumper, g.left_trigger, self.CLIMB_POWER))
+        if self.second_climb is not None:
+            self.second_climb.setPower(self.climb_power(g.right_bumper, g.right_trigger, self.SECOND_CLIMB_POWER))
+        if g.dpad_down:
+            self.chain_drop.setPosition(self.CHAIN_DROP_FISHING)
+            self.entered_fishing = True
+            self.fishing.setPower(1.0)
+        elif g.dpad_up:
+            self.fishing.setPower(-1.0)
+        else:
+            self.fishing.setPower(0.0)
+        climber = 0.0
+        if self.climber_sticks:
+            climber = -g.left_stick_y * self.CLIMBER_UP
+        self.climber.setPower(climber)
+
+    @staticmethod
+    def climb_power(up: bool, down: float, up_power: float) -> float:
+        """Bumper = up at full power, trigger = down as far as it is pressed."""
+        if up:
+            return up_power
+        return -up_power * down
+
+    def stop_climbing(self) -> None:
+        self.climber_sticks = False
+        self.climb_upper.setPower(0.0)
+        if self.second_climb is not None:
+            self.second_climb.setPower(0.0)
+        self.fishing.setPower(0.0)
+        self.climber.setPower(0.0)
 
     # ------------------------------------------------------------------ telemetry
 
@@ -523,11 +521,6 @@ class Main(LinearOpMode):
             return "Drive: UNCALIBRATED - run the Calibration OpMode"
         return f"Drive: calibrated ({self.cal.done_count()} of 8 steps)"
 
-    def limit_line(self) -> str:
-        if self.climb_limit_dc is None and self.climb_limit_touch is None:
-            return f"Climb: no '{self.CLIMB_LIMIT_NAME}' switch configured: triangle stops after {self.CLIMB_UP_TIMEOUT_MS / 1000.0:.0f} s"
-        return "Climb: switch " + ("UP" if self.at_top() else "not up")
-
     def show_status(self) -> None:
         if self.manual:
             self.telemetry.addLine("MANUAL MODE (gamepad 2): no automation except unjamming")
@@ -552,9 +545,9 @@ class Main(LinearOpMode):
             self.telemetry.addData("Ball pickup", self.pickup_guard.status())
         if self.feed_guard.is_faulted() or self.pickup_guard.is_faulted():
             self.telemetry.addLine("!! Collector JAMMED - clear by hand, then press its button to turn it off and on")
-        self.telemetry.addData("ClimbUpper", self.climb_status)
-        self.telemetry.addData("Climber", "UP" if self.climber_button.phase == 1 else "DOWN")
-        if self.entered_fishing:
-            self.telemetry.addLine("Fishing mode entered")
-        if self.fixator_used:
-            self.telemetry.addLine("Fixator released")
+        if self.climb_mode:
+            self.telemetry.addLine("CLIMBING MODE (share to leave): shooter and pickup off")
+            self.telemetry.addData("Sticks", "CLIMBER (square: back to driving)" if self.climber_sticks else "driving (square: Climber)")
+            self.telemetry.addData("Chain brake", "ENGAGED" if self.brake_engaged else "released")
+            if self.fixator_until_ms > 0:
+                self.telemetry.addLine("Fixator releasing")
