@@ -37,7 +37,7 @@ and off. In it, driving works as usual, the shooter and pickup are off, and:
 bumpers raise and triggers lower ClimbUpper (left) and SecondClimbUpper
 (right, configured as a CR servo named `SecondClimbUpper`), options runs the
 fixator release for 1 s per press, dpad down/up move the chain (the first
-dpad down also drops it), L3 engages/releases the chain brake, and square
+dpad down also drops it), cross engages/releases the chain brake, and square
 hands the left stick to the Climber motor instead of the drive. None of it
 exists outside climbing mode.
 

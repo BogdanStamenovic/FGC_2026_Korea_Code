@@ -20,7 +20,7 @@ In climbing mode, driving works the same, the shooter and pickup are off
                                  (bumpers full power, triggers as far as pressed)
   options             fixator release, 1 s per press, as often as needed
   dpad down / up      chain down / up (the first dpad down also drops the chain)
-  L3                  chain brake: engage / release, each press
+  cross               chain brake: engage / release, each press
   square              the left stick (up/down) runs the Climber motor instead
                       of driving; press again to drive
 None of these exist outside climbing mode. Leaving it stops every climbing
@@ -166,7 +166,7 @@ class Main(LinearOpMode):
     # climbing mode.
     press_share: bool
     press_options: bool
-    press_l3: bool
+    press_brake: bool
     press_square: bool
     # Loop time and battery, shown so a lagging robot or a power drop can be
     # told apart from a code problem: slow loop = code, low volts = battery.
@@ -245,7 +245,7 @@ class Main(LinearOpMode):
         self.brake_engaged = False
         self.press_share = False
         self.press_options = False
-        self.press_l3 = False
+        self.press_brake = False
         self.press_square = False
         self.clock = ElapsedTime()
 
@@ -312,7 +312,8 @@ class Main(LinearOpMode):
     def read_presses(self) -> None:
         self.press_share = self.pad.backWasPressed()
         self.press_options = self.pad.optionsWasPressed()
-        self.press_l3 = self.pad.leftStickButtonWasPressed()
+        # Cross is the shooter's button outside climbing mode; in it, the brake's.
+        self.press_brake = self.pad.crossWasPressed()
         self.press_square = self.pad.squareWasPressed()
 
     def update_drive(self) -> None:
@@ -456,7 +457,7 @@ class Main(LinearOpMode):
         g = self.pad
         if self.press_square:
             self.climber_sticks = not self.climber_sticks
-        if self.press_l3:
+        if self.press_brake:
             self.brake_engaged = not self.brake_engaged
             self.chain_stop.setPosition(self.CHAIN_STOP_ENGAGED if self.brake_engaged else self.CHAIN_STOP_START)
         if self.press_options:
