@@ -16,8 +16,11 @@ an unjam: a motor spinning up is slow on purpose.
 
 The limits were loosened on 26 Sep (stall 150 -> 400 ms, 25% -> 15% of free
 speed, 6 -> 7.5 A, 3 -> 4 unjams): balls passing through slow the intake
-briefly, and that was being backed out as a jam. last_cause says what
-triggered the most recent unjam, so the next tuning can start from numbers.
+briefly, and that was being backed out as a jam. On 28 Sep they were
+tightened a little, about halfway back (stall 400 -> 300 ms, 15% -> 20%,
+7.5 -> 7 A; still 4 unjams): real jams took too long to be noticed.
+last_cause says what triggered the most recent unjam, so the next tuning can
+start from numbers.
 """
 
 from ftc.hardware import DcMotorEx
@@ -33,10 +36,10 @@ class JamGuard:
     FAULT: int = 4
 
     GRACE_MS: float = 500.0
-    STALL_MS: float = 400.0
-    STALL_FRACTION: float = 0.15
+    STALL_MS: float = 300.0
+    STALL_FRACTION: float = 0.2
     MIN_TPS: float = 40.0
-    STALL_AMPS: float = 7.5
+    STALL_AMPS: float = 7.0
     UNJAM_MS: float = 250.0
     UNJAM_POWER: float = 1.0
     # More than MAX_UNJAMS unjams within UNJAM_WINDOW_MS means it isn't clearing.
