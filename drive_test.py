@@ -17,11 +17,14 @@ calibration file is. Holding two direction buttons at once does nothing.
 
 Telemetry shows what each wheel was told and what its encoder says it did,
 and how far the robot turned during the move (a pure move should stay near
-0 degrees).
+0 degrees). After each move it also shows each wheel's average speed as a
+percentage of the four wheels' average: a robot that curves has a slow wheel
+on the inside of the curve, and this names it.
 """
 
 from ftc.hardware import LynxModule
 from ftc.opmode import LinearOpMode, TeleOp
+from ftc.util import ElapsedTime
 from drive import OmniDrive
 from drive_cal import DriveCal
 
@@ -29,6 +32,11 @@ from drive_cal import DriveCal
 @TeleOp(name="Drive Test", group="pyftc")
 class DriveTest(LinearOpMode):
     POWER_STEP: float = 0.1
+    # Wheel speeds are averaged from this long after a move starts: while the
+    # robot accelerates, the wheels are not yet at their own speed.
+    SETTLE_MS: float = 300.0
+    # A wheel below this share of the average is called out as slow.
+    SLOW_PERCENT: float = 92.0
     START_POWER: float = 0.4
 
     cal: DriveCal
@@ -41,6 +49,10 @@ class DriveTest(LinearOpMode):
     move_start_deg: float
     last_move: str
     last_turned: float
+    move_clock: ElapsedTime
+    speed_sum: list[float]
+    speed_n: int
+    last_speeds: str
 
     def runOpMode(self) -> None:
         self.cal = DriveCal()
@@ -57,6 +69,10 @@ class DriveTest(LinearOpMode):
         self.move_start_deg = 0.0
         self.last_move = ""
         self.last_turned = 0.0
+        self.move_clock = ElapsedTime()
+        self.speed_sum = [0.0, 0.0, 0.0, 0.0]
+        self.speed_n = 0
+        self.last_speeds = ""
 
         self.telemetry.addLine("Drive Test. Robot on the floor, room around it. Press START.")
         self.telemetry.addLine("Hold dpad = forward/back/strafe, bumpers = turn, square = RAW/CALIBRATED")
@@ -116,8 +132,16 @@ class DriveTest(LinearOpMode):
                 if self.move != "":
                     self.last_move = self.move
                     self.last_turned = self.drive.heading() - self.move_start_deg
+                    self.last_speeds = self.wheel_speeds()
                 self.move = move
                 self.move_start_deg = self.drive.heading()
+                self.move_clock.reset()
+                self.speed_sum = [0.0, 0.0, 0.0, 0.0]
+                self.speed_n = 0
+            if move != "" and self.move_clock.milliseconds() >= self.SETTLE_MS:
+                for i in range(4):
+                    self.speed_sum[i] = self.speed_sum[i] + abs(self.drive.motors[i].getVelocity())
+                self.speed_n = self.speed_n + 1
             if move == "":
                 self.drive.stop()
             else:
@@ -127,6 +151,24 @@ class DriveTest(LinearOpMode):
             self.show(held)
         self.drive.stop()
 
+    def wheel_speeds(self) -> str:
+        """Each wheel's average speed this move, as a % of the four's average."""
+        if self.speed_n == 0:
+            return "too short to measure (hold at least 1 s)"
+        mean = (self.speed_sum[0] + self.speed_sum[1] + self.speed_sum[2] + self.speed_sum[3]) / 4.0
+        if mean <= 0.0:
+            return "no encoder counts from any wheel"
+        text = ""
+        slow = ""
+        for i in range(4):
+            pct = 100.0 * self.speed_sum[i] / mean
+            text = text + f"{OmniDrive.WHEEL_NAMES[i]} {pct:.0f}%  "
+            if pct < self.SLOW_PERCENT:
+                slow = slow + " " + OmniDrive.WHEEL_NAMES[i]
+        if slow != "":
+            text = text + "| slow:" + slow
+        return text
+
     def show(self, held: int) -> None:
         mode = "RAW (mix + motor directions only)" if self.raw else "CALIBRATED (as Main drives)"
         self.telemetry.addData("Mode", mode + ", square to switch")
@@ -134,12 +176,14 @@ class DriveTest(LinearOpMode):
         if self.move != "":
             turned = self.drive.heading() - self.move_start_deg
             self.telemetry.addData("Driving", f"{self.move}, turned {turned:+.1f} deg so far")
+            self.telemetry.addData("Wheel speeds", self.wheel_speeds())
         elif held > 1:
             self.telemetry.addData("Driving", "stopped: one button at a time")
         else:
             self.telemetry.addData("Driving", "stopped: hold a dpad direction or a bumper")
         if self.last_move != "":
             self.telemetry.addData("Last move", f"{self.last_move}, turned {self.last_turned:+.1f} deg")
+            self.telemetry.addData("Last wheel speeds", self.last_speeds)
         if not self.raw and not self.cal.loaded:
             self.telemetry.addLine("No calibration file: CALIBRATED drives the same as RAW")
         for i in range(4):
