@@ -20,9 +20,18 @@ and how far the robot turned during the move (a pure move should stay near
 0 degrees). After each move it also shows each wheel's average speed as a
 percentage of the four wheels' average: a robot that curves has a slow wheel
 on the inside of the curve, and this names it.
+
+Motor current is shown too, live and averaged per move, to tell a weak
+wheel's cause (HD Hex: ~8.5 A at stall):
+  slow + MORE current than the others   something drags: gearbox, rollers,
+                                        a rubbing chain or frame
+  slow + about the SAME current         the motor or gearbox is worn/weak
+  slow + LESS current                   power doesn't reach it: connector,
+                                        cable, or the hub port
 """
 
-from ftc.hardware import LynxModule
+from ftc.hardware import LynxModule, VoltageSensor
+from ftc.navigation import CurrentUnit
 from ftc.opmode import LinearOpMode, TeleOp
 from ftc.util import ElapsedTime
 from drive import OmniDrive
@@ -53,6 +62,14 @@ class DriveTest(LinearOpMode):
     speed_sum: list[float]
     speed_n: int
     last_speeds: str
+    # Current per wheel: this loop, summed over the move, and peak in the move.
+    amps: list[float]
+    amps_sum: list[float]
+    amps_peak: list[float]
+    last_amps: str
+    batteries: list[VoltageSensor]
+    volts: float
+    volts_low: float
 
     def runOpMode(self) -> None:
         self.cal = DriveCal()
@@ -73,6 +90,13 @@ class DriveTest(LinearOpMode):
         self.speed_sum = [0.0, 0.0, 0.0, 0.0]
         self.speed_n = 0
         self.last_speeds = ""
+        self.amps = [0.0, 0.0, 0.0, 0.0]
+        self.amps_sum = [0.0, 0.0, 0.0, 0.0]
+        self.amps_peak = [0.0, 0.0, 0.0, 0.0]
+        self.last_amps = ""
+        self.batteries = self.hardwareMap.getAll(VoltageSensor)
+        self.volts = 0.0
+        self.volts_low = 99.0
 
         self.telemetry.addLine("Drive Test. Robot on the floor, room around it. Press START.")
         self.telemetry.addLine("Hold dpad = forward/back/strafe, bumpers = turn, square = RAW/CALIBRATED")
@@ -133,17 +157,32 @@ class DriveTest(LinearOpMode):
                     self.last_move = self.move
                     self.last_turned = self.drive.heading() - self.move_start_deg
                     self.last_speeds = self.wheel_speeds()
+                    self.last_amps = self.wheel_amps()
                 self.move = move
                 self.move_start_deg = self.drive.heading()
                 self.move_clock.reset()
                 self.speed_sum = [0.0, 0.0, 0.0, 0.0]
+                self.amps_sum = [0.0, 0.0, 0.0, 0.0]
+                self.amps_peak = [0.0, 0.0, 0.0, 0.0]
                 self.speed_n = 0
+            if move != "":
+                # Current is not in the bulk read: 4 extra hub commands per
+                # loop (plus the battery), acceptable in a test OpMode, and
+                # only while moving.
+                for i in range(4):
+                    self.amps[i] = self.drive.motors[i].getCurrent(CurrentUnit.AMPS)
+                    self.amps_peak[i] = max(self.amps_peak[i], self.amps[i])
+                if len(self.batteries) > 0:
+                    self.volts = self.batteries[0].getVoltage()
+                    self.volts_low = min(self.volts_low, self.volts)
             if move != "" and self.move_clock.milliseconds() >= self.SETTLE_MS:
                 for i in range(4):
                     self.speed_sum[i] = self.speed_sum[i] + abs(self.drive.motors[i].getVelocity())
+                    self.amps_sum[i] = self.amps_sum[i] + self.amps[i]
                 self.speed_n = self.speed_n + 1
             if move == "":
                 self.drive.stop()
+                self.amps = [0.0, 0.0, 0.0, 0.0]
             else:
                 # drive()'s +rotation turns this robot left, so turning right
                 # is -rot: the same flip Main applies to the right stick.
@@ -169,6 +208,15 @@ class DriveTest(LinearOpMode):
             text = text + "| slow:" + slow
         return text
 
+    def wheel_amps(self) -> str:
+        """Each wheel's average current this move (peak in brackets)."""
+        if self.speed_n == 0:
+            return "too short to measure (hold at least 1 s)"
+        text = ""
+        for i in range(4):
+            text = text + f"{OmniDrive.WHEEL_NAMES[i]} {self.amps_sum[i] / self.speed_n:.1f} ({self.amps_peak[i]:.1f})  "
+        return text + "A avg (peak)"
+
     def show(self, held: int) -> None:
         mode = "RAW (mix + motor directions only)" if self.raw else "CALIBRATED (as Main drives)"
         self.telemetry.addData("Mode", mode + ", square to switch")
@@ -177,6 +225,7 @@ class DriveTest(LinearOpMode):
             turned = self.drive.heading() - self.move_start_deg
             self.telemetry.addData("Driving", f"{self.move}, turned {turned:+.1f} deg so far")
             self.telemetry.addData("Wheel speeds", self.wheel_speeds())
+            self.telemetry.addData("Wheel current", self.wheel_amps())
         elif held > 1:
             self.telemetry.addData("Driving", "stopped: one button at a time")
         else:
@@ -184,9 +233,12 @@ class DriveTest(LinearOpMode):
         if self.last_move != "":
             self.telemetry.addData("Last move", f"{self.last_move}, turned {self.last_turned:+.1f} deg")
             self.telemetry.addData("Last wheel speeds", self.last_speeds)
+            self.telemetry.addData("Last wheel current", self.last_amps)
         if not self.raw and not self.cal.loaded:
             self.telemetry.addLine("No calibration file: CALIBRATED drives the same as RAW")
         for i in range(4):
             m = self.drive.motors[i]
-            self.telemetry.addData(OmniDrive.WHEEL_NAMES[i], f"told {m.getPower():+.2f}, encoder {m.getVelocity():+.0f} ticks/s")
+            self.telemetry.addData(OmniDrive.WHEEL_NAMES[i], f"told {m.getPower():+.2f}, encoder {m.getVelocity():+.0f} ticks/s, {self.amps[i]:.2f} A")
+        if self.volts > 0:
+            self.telemetry.addData("Battery", f"{self.volts:.2f} V (lowest while moving {self.volts_low:.2f} V)")
         self.telemetry.update()
