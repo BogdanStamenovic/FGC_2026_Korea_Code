@@ -10,6 +10,7 @@ Hardware configuration on the hub: `FGC2026-Incheon`.
 | `drive.py` | `OmniDrive`: X-drive mix, calibrated corrections, heading hold, odometry, `drive_cm` / `turn_to` for autonomous. |
 | `drive_cal.py` | `DriveCal`: the saved numbers, `/sdcard/FIRST/settings/omni_calibration.txt`. |
 | `jam.py` | `JamGuard`: detects a stuck intake, backs it out, gives up after 4 tries in 3 s. |
+| `drive_test.py` | TeleOp **Drive Test**: drives one pure direction at a time (hold dpad / bumpers) to check the drive mix. |
 | `aftercare.py` | Empty after-match OpMode. |
 
 ## Calibrating the drive
@@ -29,6 +30,17 @@ strafing, no turning) so you can see how good the numbers are.
 Until step 5 (Turn ramp) is saved, heading hold stays off: which way the
 robot turns for +rotation is only known once it has been measured, and a
 wrong guess would make heading hold spin the robot.
+
+## Checking drive directions
+
+Run **Drive Test** with the robot on the floor. It only moves while a button
+is held: dpad up/down = forward/backward, dpad right/left = strafe right/left,
+bumpers = turn right/left, triangle/cross = power up/down (starts at 0.4),
+square switches between RAW (the wheel mix and motor directions in
+`drive.py`, nothing else) and CALIBRATED (as Main drives, minus heading hold).
+Wrong in RAW: the mix or a motor direction is wrong. Right in RAW but wrong
+in CALIBRATED: the calibration file is. Telemetry shows each wheel's power
+and encoder speed, and how many degrees the robot turned during the move.
 
 ## Controls, climbing mode and manual mode
 

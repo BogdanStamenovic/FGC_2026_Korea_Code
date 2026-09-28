@@ -25,6 +25,9 @@ In climbing mode, driving works the same, the shooter and pickup are off
                       of driving; press again to drive
 None of these exist outside climbing mode. Leaving it stops every climbing
 motor; the chain brake stays where it is.
+While the Climber runs, telemetry shows what it was told, the current it
+draws, the lowest battery voltage and how many power cuts it saw (current
+dropping to ~0 and coming back while the power sent stayed the same).
 
 MANUAL MODE: the first time anything on gamepad 2 is touched, gamepad 2 takes
 over for the rest of the match and gamepad 1 is ignored. Same layout, but
@@ -45,6 +48,7 @@ IMU only when heading hold can use it, and builds telemetry 10 times a second.
 
 # ── pyftc:imports ──
 from ftc.hardware import CRServo, DcMotor, DcMotorEx, DcMotorSimple, Gamepad, LynxModule, Servo, VoltageSensor
+from ftc.navigation import CurrentUnit
 from ftc.opmode import LinearOpMode, TeleOp
 from ftc.util import ElapsedTime
 from drive import OmniDrive
@@ -91,7 +95,7 @@ class Main(LinearOpMode):
     # The drive motors and the IMU live in OmniDrive.
     collector: DcMotorEx
     shooter: DcMotorEx
-    climber: DcMotor
+    climber: DcMotorEx
     fishing: DcMotor
     chain_drop: Servo
     chain_stop: Servo
@@ -130,6 +134,13 @@ class Main(LinearOpMode):
     SECOND_CLIMB_POWER: float = -1.0
     # How far a gamepad 2 stick or trigger must move to count as "in use".
     PAD2_TOUCH: float = 0.3
+    # A power cut on the Climber: told to pull (|power| >= 0.5), current drops
+    # below CUT_AMPS and is back above CUT_LOADED_AMPS within CUT_RECOVER_MS.
+    # The code sends the same power throughout, so that on-off-on is
+    # electrical. (A drop that stays down is just the motor running free.)
+    CUT_LOADED_AMPS: float = 1.0
+    CUT_AMPS: float = 0.3
+    CUT_RECOVER_MS: float = 500.0
     VOLTS_EVERY_MS: float = 500.0
     TELEMETRY_EVERY_MS: float = 100.0
 
@@ -160,6 +171,16 @@ class Main(LinearOpMode):
     climb_mode: bool
     climber_sticks: bool
     brake_engaged: bool
+    # Climber watch, since climbing mode was entered (see watch_climber).
+    climber_power: float
+    climber_amps: float
+    climber_peak_amps: float
+    climb_volts: float
+    climb_volts_low: float
+    climber_loaded: bool
+    # When the current dropped, or -1 while it hasn't.
+    climber_dip_ms: float
+    climber_cuts: int
     # This loop's button presses. Every *WasPressed() is read once per loop,
     # whatever the mode: an unread press would otherwise wait and fire later,
     # e.g. an options press from driving releasing the fixator on entering
@@ -186,7 +207,7 @@ class Main(LinearOpMode):
         # ── pyftc:init ──
         self.collector = self.hardwareMap.get(DcMotorEx, "Collector")
         self.shooter = self.hardwareMap.get(DcMotorEx, "shooter")
-        self.climber = self.hardwareMap.get(DcMotor, "Climber")
+        self.climber = self.hardwareMap.get(DcMotorEx, "Climber")
         self.fishing = self.hardwareMap.get(DcMotor, "Fishing")
         self.chain_drop = self.hardwareMap.get(Servo, "chainDrop")
         self.chain_stop = self.hardwareMap.get(Servo, "ChainStop")
@@ -214,6 +235,10 @@ class Main(LinearOpMode):
         if self.second_climb is not None:
             self.second_climb.setDirection(DcMotorSimple.Direction.FORWARD)
         self.climber.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
+        # Explicit, like the shooter: the run mode survives from the last
+        # OpMode, and in RUN_USING_ENCODER setPower becomes a speed target that
+        # a loaded motor (or a loose encoder cable) turns into on/off chatter.
+        self.climber.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER)
         self.batteries = self.hardwareMap.getAll(VoltageSensor)
         self.volts = 0.0
         self.volts_low = 99.0
@@ -243,6 +268,7 @@ class Main(LinearOpMode):
         self.climb_mode = False
         self.climber_sticks = False
         self.brake_engaged = False
+        self.reset_climber_watch()
         self.press_share = False
         self.press_options = False
         self.press_brake = False
@@ -444,6 +470,7 @@ class Main(LinearOpMode):
                 # Phase 0 makes MagDump/BallPickup switch themselves off this loop.
                 self.mag_button.phase = 0
                 self.pickup_button.phase = 0
+                self.reset_climber_watch()
                 self.pad.rumbleBlips(1)
             else:
                 self.stop_climbing()
@@ -478,6 +505,41 @@ class Main(LinearOpMode):
         if self.climber_sticks:
             climber = -g.left_stick_y * self.CLIMBER_UP
         self.climber.setPower(climber)
+        self.climber_power = climber
+        if abs(climber) > 0.01:
+            self.watch_climber(climber, now)
+
+    def reset_climber_watch(self) -> None:
+        self.climber_power = 0.0
+        self.climber_amps = 0.0
+        self.climber_peak_amps = 0.0
+        self.climb_volts = 0.0
+        self.climb_volts_low = 99.0
+        self.climber_loaded = False
+        self.climber_dip_ms = -1.0
+        self.climber_cuts = 0
+
+    def watch_climber(self, power: float, now: float) -> None:
+        """Every loop while the Climber runs: its current and the battery, two
+        hub commands. Every loop and not at the 10 Hz of the rest, because a
+        power cut can be shorter than 100 ms; nothing else runs while climbing."""
+        self.climber_amps = self.climber.getCurrent(CurrentUnit.AMPS)
+        self.climber_peak_amps = max(self.climber_peak_amps, self.climber_amps)
+        if len(self.batteries) > 0:
+            self.climb_volts = self.batteries[0].getVoltage()
+            self.climb_volts_low = min(self.climb_volts_low, self.climb_volts)
+        if abs(power) < 0.5:
+            self.climber_loaded = False
+            self.climber_dip_ms = -1.0
+            return
+        if self.climber_amps >= self.CUT_LOADED_AMPS:
+            if self.climber_dip_ms >= 0 and now - self.climber_dip_ms <= self.CUT_RECOVER_MS:
+                self.climber_cuts = self.climber_cuts + 1
+            self.climber_loaded = True
+            self.climber_dip_ms = -1.0
+        elif self.climber_amps < self.CUT_AMPS and self.climber_loaded:
+            self.climber_loaded = False
+            self.climber_dip_ms = now
 
     @staticmethod
     def climb_power(up: bool, down: float, up_power: float) -> float:
@@ -550,5 +612,8 @@ class Main(LinearOpMode):
             self.telemetry.addLine("CLIMBING MODE (share to leave): shooter and pickup off")
             self.telemetry.addData("Sticks", "CLIMBER (square: back to driving)" if self.climber_sticks else "driving (square: Climber)")
             self.telemetry.addData("Chain brake", "ENGAGED" if self.brake_engaged else "released")
+            if self.climber_peak_amps > 0:
+                self.telemetry.addData("Climber", f"told {self.climber_power:+.2f}, {self.climber_amps:.1f} A (peak {self.climber_peak_amps:.1f} A), power cuts seen: {self.climber_cuts}")
+                self.telemetry.addData("Battery while climbing", f"{self.climb_volts:.2f} V (lowest {self.climb_volts_low:.2f} V)")
             if self.fixator_until_ms > 0:
                 self.telemetry.addLine("Fixator releasing")
