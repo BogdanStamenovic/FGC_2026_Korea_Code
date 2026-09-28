@@ -18,7 +18,8 @@ The limits were loosened on 26 Sep (stall 150 -> 400 ms, 25% -> 15% of free
 speed, 6 -> 7.5 A, 3 -> 4 unjams): balls passing through slow the intake
 briefly, and that was being backed out as a jam. On 28 Sep they were
 tightened a little, about halfway back (stall 400 -> 300 ms, 15% -> 20%,
-7.5 -> 7 A; still 4 unjams): real jams took too long to be noticed.
+7.5 -> 7 A; still 4 unjams): real jams took too long to be noticed. The
+back-out itself runs 300 ms instead of 250.
 last_cause says what triggered the most recent unjam, so the next tuning can
 start from numbers.
 """
@@ -40,9 +41,13 @@ class JamGuard:
     STALL_FRACTION: float = 0.2
     MIN_TPS: float = 40.0
     STALL_AMPS: float = 7.0
-    UNJAM_MS: float = 250.0
+    UNJAM_MS: float = 300.0
     UNJAM_POWER: float = 1.0
-    # More than MAX_UNJAMS unjams within UNJAM_WINDOW_MS means it isn't clearing.
+    # More than MAX_UNJAMS unjams within the window means it isn't clearing.
+    # The window is at least UNJAM_WINDOW_MS but always long enough to hold
+    # MAX_UNJAMS full unjam cycles (back out + grace + stall). A fixed 3 s
+    # stopped holding 4 cycles when the limits were loosened on 26 Sep, and
+    # from then on a permanent jam was retried forever instead of giving up.
     MAX_UNJAMS: int = 4
     UNJAM_WINDOW_MS: float = 3000.0
     # The free-running speed is only learned from power at least this high.
@@ -172,8 +177,9 @@ class JamGuard:
 
         # Jammed: forget unjams outside the window, then back out or give up.
         recent: list[float] = []
+        window = max(self.UNJAM_WINDOW_MS, self.MAX_UNJAMS * (self.UNJAM_MS + self.GRACE_MS + self.STALL_MS) + 500.0)
         for t in self.unjam_times:
-            if now - t < self.UNJAM_WINDOW_MS:
+            if now - t < window:
                 recent.append(t)
         self.unjam_times = recent
         if len(self.unjam_times) >= self.MAX_UNJAMS:
