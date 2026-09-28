@@ -292,7 +292,13 @@ class OmniDrive:
         correction: extra rotation (heading hold); it only gets the power the
         command leaves free, plus at most CORRECTION_RESERVE taken from it."""
         if self.use_corrections:
-            correction = correction + self.cal.drift_fwd * fwd + self.cal.drift_str * strafe
+            drift_f = self.cal.drift_fwd
+            if fwd < 0:
+                drift_f = self.cal.drift_back
+            drift_s = self.cal.drift_str
+            if strafe < 0:
+                drift_s = self.cal.drift_left
+            correction = correction + drift_f * fwd + drift_s * strafe
         w: list[float] = []
         biggest = 1.0
         for i in range(4):

@@ -46,9 +46,18 @@ class DriveCal:
     ticks_per_cm_fwd: float
     ticks_per_cm_str: float
     # Step "drift": rotation power per unit of forward / strafe command that
-    # cancels the turning the robot does by itself when driving straight.
+    # cancels the turning the robot does by itself when driving straight, one
+    # per direction (drift_fwd forward, drift_back backward, drift_str right,
+    # drift_left left). A single number per axis cannot fix a robot that
+    # curves going forward but not backward: until 28 Sep there was one, the
+    # average of the two, which was wrong both ways.
     drift_fwd: float
+    drift_back: float
     drift_str: float
+    drift_left: float
+    # Whether the file had drift_back/drift_left. Older files only have one
+    # number per axis, which then stands for both directions, as it did.
+    drift_split: bool
 
     def __init__(self) -> None:
         self.reset()
@@ -76,7 +85,10 @@ class DriveCal:
         self.ticks_per_cm_fwd = 14.0
         self.ticks_per_cm_str = 14.0
         self.drift_fwd = 0.0
+        self.drift_back = 0.0
         self.drift_str = 0.0
+        self.drift_left = 0.0
+        self.drift_split = False
 
     def has(self, step: str) -> bool:
         for s in self.done.split(","):
@@ -109,6 +121,9 @@ class DriveCal:
                 parts = line.strip().split("=")
                 if len(parts) == 2:
                     self.set_value(parts[0], parts[1])
+            if not self.drift_split:
+                self.drift_back = self.drift_fwd
+                self.drift_left = self.drift_str
             self.loaded = True
         except ValueError as e:
             # A corrupt file must not stop the robot from driving: fall back to
@@ -151,6 +166,12 @@ class DriveCal:
             self.drift_fwd = float(value)
         elif key == "drift_str":
             self.drift_str = float(value)
+        elif key == "drift_back":
+            self.drift_back = float(value)
+            self.drift_split = True
+        elif key == "drift_left":
+            self.drift_left = float(value)
+            self.drift_split = True
 
     def parse_list(self, value: str) -> list[float]:
         parts = value.split(",")
@@ -185,6 +206,8 @@ class DriveCal:
         text = text + "ticks_per_cm_str=" + str(self.ticks_per_cm_str) + "\n"
         text = text + "drift_fwd=" + str(self.drift_fwd) + "\n"
         text = text + "drift_str=" + str(self.drift_str) + "\n"
+        text = text + "drift_back=" + str(self.drift_back) + "\n"
+        text = text + "drift_left=" + str(self.drift_left) + "\n"
         ReadWriteFile.writeFile(self.file(), text)
         self.loaded = True
 

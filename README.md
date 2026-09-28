@@ -27,6 +27,12 @@ Redo 2 after changing a motor or gearbox, 3-5 after moving the Control Hub,
 nothing: they drive a 60 cm and a 1 m square (forward, right, back, left,
 strafing, no turning) so you can see how good the numbers are.
 
+Step 8 (Drift) saves a separate correction for forward, backward, right
+and left, because a robot can curve one way only (ours curved left going
+forward and drove straight backward). A file saved before 28 Sep has one
+number per axis; it still loads, used for both directions as before. Redo
+step 8 to get the four.
+
 Until step 5 (Turn ramp) is saved, heading hold stays off: which way the
 robot turns for +rotation is only known once it has been measured, and a
 wrong guess would make heading hold spin the robot.

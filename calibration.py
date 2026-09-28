@@ -643,9 +643,13 @@ class Calibration(LinearOpMode):
                         "cross/A: start    B: back"):
             return
         old_fwd = self.cal.drift_fwd
+        old_back = self.cal.drift_back
         old_str = self.cal.drift_str
+        old_left = self.cal.drift_left
         self.cal.drift_fwd = 0.0
+        self.cal.drift_back = 0.0
         self.cal.drift_str = 0.0
+        self.cal.drift_left = 0.0
         self.drive.start()
         fwd_cmd: list[float] = [0.5, -0.5, 0.0, 0.0]
         str_cmd: list[float] = [0.0, 0.0, 0.5, -0.5]
@@ -667,22 +671,32 @@ class Calibration(LinearOpMode):
             rates[k] = total / max(n, 1)
             needed[k] = -rates[k] / self.cal.turn_kv
         self.cal.drift_fwd = old_fwd
+        self.cal.drift_back = old_back
         self.cal.drift_str = old_str
+        self.cal.drift_left = old_left
         if not self.opModeIsActive():
             return
-        drift_fwd = (needed[0] / 0.5 + needed[1] / -0.5) / 2.0
-        drift_str = (needed[2] / 0.5 + needed[3] / -0.5) / 2.0
+        # One correction per direction, not one per axis: a robot can curve
+        # going forward and drive straight going backward.
+        drift_fwd = needed[0] / 0.5
+        drift_back = needed[1] / -0.5
+        drift_str = needed[2] / 0.5
+        drift_left = needed[3] / -0.5
         if not self.ask("8. Drift results",
                         "Turning by itself while driving straight:\n"
                         f"forward {rates[0]:+.1f}  back {rates[1]:+.1f}  right {rates[2]:+.1f}  left {rates[3]:+.1f} deg/s\n"
-                        f"-> correction {drift_fwd:+.3f} (forward), {drift_str:+.3f} (strafe)\n"
+                        f"-> corrections: forward {drift_fwd:+.3f}  back {drift_back:+.3f}\n"
+                        f"   right {drift_str:+.3f}  left {drift_left:+.3f}\n"
                         "Heading hold catches what is left.\n\n"
                         "cross/A: save    B: discard"):
             self.last_result = "Drift discarded."
             return
         self.cal.drift_fwd = drift_fwd
+        self.cal.drift_back = drift_back
         self.cal.drift_str = drift_str
-        self.save("drift", f"Corrections {drift_fwd:+.3f} / {drift_str:+.3f}.")
+        self.cal.drift_left = drift_left
+        self.cal.drift_split = True
+        self.save("drift", f"Corrections fwd {drift_fwd:+.3f} back {drift_back:+.3f} right {drift_str:+.3f} left {drift_left:+.3f}.")
 
     # ------------------------------------------------------------------ 9/10. squares
 
