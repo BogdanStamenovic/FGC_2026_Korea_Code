@@ -9,7 +9,9 @@ Controls, on gamepad 1:
   options             heading hold on/off (on at start; 1 rumble = on, 2 = off)
   cross               MagDump: off -> spin up shooter -> shoot -> off
   circle              BallPickup on/off
-                      (MagDump and BallPickup share the Collector motor: while
+                      (MagDump and BallPickup share the Collector motor, which
+                      always spins the pickup way; MagDump deploys the "clutch"
+                      servo so the same motion also feeds the shooter. While
                       one is on, the other's button only rumbles)
   share               climbing mode on/off (1 rumble = on, 2 = off)
 
@@ -90,9 +92,9 @@ class Cycle:
 @TeleOp(name="Main", group="pyftc")
 class Main(LinearOpMode):
     # ── pyftc:devices ──
-    # "Collector" is both the ball collector (REVERSE) and the shooter
-    # intake (FORWARD): the motor is mounted the other way round since 26 Sep.
-    # The drive motors and the IMU live in OmniDrive.
+    # "Collector" is both the ball collector and the shooter intake. It always
+    # spins REVERSE (the pickup direction); the "clutch" servo couples it to
+    # the shooter intake. The drive motors and the IMU live in OmniDrive.
     collector: DcMotorEx
     shooter: DcMotorEx
     climber: DcMotorEx
@@ -124,6 +126,11 @@ class Main(LinearOpMode):
     CHAIN_DROP_FISHING: float = 0.25
     CHAIN_STOP_START: float = 0.7
     CHAIN_STOP_ENGAGED: float = 0.4
+    # Clutch servo positions. 0 = deployed (Collector drives the shooter
+    # intake). The retracted end is a guess: check it on the robot.
+    CLUTCH_NAME: str = "clutch"
+    CLUTCH_DEPLOYED: float = 0.0
+    CLUTCH_RETRACTED: float = 1.0
     FIXATOR_POWER: float = 1.0
     FIXATOR_MS: float = 1000.0
     # The power that moves each climbing part up (flip a sign if one runs
@@ -168,6 +175,8 @@ class Main(LinearOpMode):
     fixator_until_ms: float
     # None if "SecondClimbUpper" is not in the hub configuration.
     second_climb: CRServo
+    # None if "clutch" is not in the hub configuration.
+    clutch: Servo
     climb_mode: bool
     climber_sticks: bool
     brake_engaged: bool
@@ -218,6 +227,9 @@ class Main(LinearOpMode):
         self.cal.load()
         self.drive = OmniDrive(self.hardwareMap, self.cal)
         self.drive.init_imu()
+        # The direction never changes now: both jobs spin the Collector the
+        # pickup way, the clutch decides whether the shooter intake turns too.
+        self.collector.setDirection(DcMotorSimple.Direction.REVERSE)
         self.feed_guard = JamGuard("shooter intake", self.collector)
         self.pickup_guard = JamGuard("ball pickup", self.collector)
         # MANUAL: every encoder, velocity and digital read in a loop comes from
@@ -234,6 +246,8 @@ class Main(LinearOpMode):
         self.second_climb = self.hardwareMap.tryGet(CRServo, self.SECOND_CLIMB_NAME)
         if self.second_climb is not None:
             self.second_climb.setDirection(DcMotorSimple.Direction.FORWARD)
+        # tryGet: a missing clutch must not take the whole robot down at INIT.
+        self.clutch = self.hardwareMap.tryGet(Servo, self.CLUTCH_NAME)
         self.climber.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
         # Explicit, like the shooter: the run mode survives from the last
         # OpMode, and in RUN_USING_ENCODER setPower becomes a speed target that
@@ -279,6 +293,8 @@ class Main(LinearOpMode):
         self.telemetry.addLine(self.calibration_line())
         if self.second_climb is None:
             self.telemetry.addLine(f"No '{self.SECOND_CLIMB_NAME}' in the configuration: right bumper/trigger do nothing")
+        if self.clutch is None:
+            self.telemetry.addLine(f"!! No '{self.CLUTCH_NAME}' servo in the configuration: the shooter will not be fed")
         self.telemetry.update()
         self.waitForStart()
 
@@ -286,6 +302,7 @@ class Main(LinearOpMode):
         self.drive.start()
         self.chain_drop.setPosition(self.CHAIN_DROP_START)
         self.chain_stop.setPosition(self.CHAIN_STOP_START)
+        self.set_clutch(False)
         self.clock.reset()
         while self.opModeIsActive():
             for hub in self.hubs:
@@ -384,7 +401,11 @@ class Main(LinearOpMode):
     def update_mag_dump(self, now: float) -> None:
         phase = self.mag_button.phase
         if phase == 1 and self.in_use == "Free":
-            self.collector.setDirection(DcMotorSimple.Direction.FORWARD)
+            # Deployed for the whole MagDump, from spin-up on, while the
+            # Collector is not being driven: the >= FLY_RAMP_MS spin-up (or, in
+            # manual mode, the second press) gives the servo time to get there
+            # before the Collector feeds.
+            self.set_clutch(True)
             self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
             self.feed_guard.rearm()
             self.fly_ready = False
@@ -395,6 +416,7 @@ class Main(LinearOpMode):
         elif phase == 0 and self.in_use == "MagDump":
             self.feed_guard.update(0.0)
             self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT)
+            self.set_clutch(False)
             self.shooter.setPower(0.0)
             self.in_use = "Free"
             self.mag_status = "off"
@@ -445,12 +467,16 @@ class Main(LinearOpMode):
         self.fly_ref_velocity = self.fly_velocity
         self.fly_ref_ms = now
 
+    def set_clutch(self, deployed: bool) -> None:
+        if self.clutch is None:
+            return
+        self.clutch.setPosition(self.CLUTCH_DEPLOYED if deployed else self.CLUTCH_RETRACTED)
+
     # ------------------------------------------------------------------ pickup
 
     def update_ball_pickup(self) -> None:
         phase = self.pickup_button.phase
         if phase == 1 and self.in_use == "Free":
-            self.collector.setDirection(DcMotorSimple.Direction.REVERSE)
             self.pickup_guard.rearm()
             self.in_use = "BallPickup"
         elif phase == 0 and self.in_use == "BallPickup":
@@ -604,6 +630,8 @@ class Main(LinearOpMode):
             self.telemetry.addData("MagDump", self.mag_status)
             self.telemetry.addData("Flywheel", f"{self.fly_velocity:.0f} t/s, prime {self.prime_velocity:.0f}")
             self.telemetry.addData("Shooter intake", self.feed_guard.status())
+            if self.clutch is None:
+                self.telemetry.addLine(f"!! No '{self.CLUTCH_NAME}' servo: nothing reaches the shooter")
         if self.in_use == "BallPickup":
             self.telemetry.addData("Ball pickup", self.pickup_guard.status())
         if self.feed_guard.is_faulted() or self.pickup_guard.is_faulted():

@@ -48,6 +48,17 @@ Wrong in RAW: the mix or a motor direction is wrong. Right in RAW but wrong
 in CALIBRATED: the calibration file is. Telemetry shows each wheel's power
 and encoder speed, and how many degrees the robot turned during the move.
 
+## Collector and the shooter clutch
+
+The Collector motor does both jobs and always spins the same way (REVERSE,
+the pickup direction). A servo named `clutch` couples it to the shooter
+intake: Main deploys it (position 0) when cross starts MagDump, before the
+Collector is driven, and pulls it back (`Main.CLUTCH_RETRACTED`, 1.0 for now,
+not yet checked on the robot) when MagDump stops, on START, and on entering
+climbing mode. Ball pickup runs with the clutch out. Without a `clutch` in
+the hub configuration Main still runs and says on telemetry that the shooter
+is not fed.
+
 ## Controls, climbing mode and manual mode
 
 The full list is at the top of `main.py`. Share switches climbing mode on
