@@ -12,8 +12,9 @@ Controls, on gamepad 1:
                       (MagDump and BallPickup share the Collector motor, which
                       always spins the pickup way; MagDump deploys the "clutch"
                       servo so the same motion also feeds the shooter, but only
-                      once the Collector has stopped turning. While one is on,
-                      the other's button only rumbles)
+                      once the Collector has stopped turning. While BallPickup
+                      is on, cross only rumbles; while MagDump is on, circle
+                      cancels it (2 rumbles) without starting BallPickup)
   share               climbing mode on/off (1 rumble = on, 2 = off)
 
 In climbing mode, driving works the same, the shooter and pickup are off
@@ -412,7 +413,9 @@ class Main(LinearOpMode):
                 self.mag_button.advance()
         if pickup:
             if self.in_use == "MagDump":
-                self.pad.rumble(150)
+                # Cancel: phase 0 makes update_mag_dump switch it off this loop.
+                self.mag_button.phase = 0
+                self.pad.rumbleBlips(2)
             else:
                 self.pickup_button.advance()
 
