@@ -15,6 +15,13 @@ Controls, on gamepad 1:
                       once the Collector has stopped turning. While BallPickup
                       is on, cross only rumbles; while MagDump is on, circle
                       cancels it (2 rumbles) without starting BallPickup)
+  triangle            Reverse on/off: the Collector runs opposite to pickup
+                      with the clutch deployed, so the shooter intake runs
+                      backwards too (the flywheel stays off). Like MagDump it
+                      waits for the Collector to stop before deploying the
+                      clutch. Triangle switches off MagDump/BallPickup and
+                      starts Reverse straight away; while Reverse is on,
+                      circle cancels it and cross only rumbles
   share               climbing mode on/off (1 rumble = on, 2 = off)
 
 In climbing mode, driving works the same, the shooter and pickup are off
@@ -116,6 +123,7 @@ class Main(LinearOpMode):
     FLY_RAMP_STEPS: int = 4
     FEED_POWER: float = 1.0
     PICKUP_POWER: float = 1.0
+    REVERSE_POWER: float = 1.0
     # Feed only while the flywheel is at >= 90% of its settled speed.
     FEED_GATE: float = 0.9
     # The flywheel counts as settled when its speed changed by less than 2%
@@ -166,16 +174,19 @@ class Main(LinearOpMode):
     drive: OmniDrive
     feed_guard: JamGuard
     pickup_guard: JamGuard
+    reverse_guard: JamGuard
     clock: ElapsedTime
     hubs: list[LynxModule]
     mag_button: Cycle
     pickup_button: Cycle
+    reverse_button: Cycle
     # The gamepad in charge: gamepad1, or gamepad2 once manual mode latched.
     pad: Gamepad
     manual: bool
-    # Who has the Collector motor: "Free", "MagDump" or "BallPickup".
+    # Who has the Collector motor: "Free", "MagDump", "BallPickup" or "Reverse".
     in_use: str
     mag_status: str
+    reverse_status: str
     fly_velocity: float
     fly_ref_velocity: float
     fly_ref_ms: float
@@ -249,6 +260,7 @@ class Main(LinearOpMode):
         self.collector.setDirection(DcMotorSimple.Direction.REVERSE)
         self.feed_guard = JamGuard("shooter intake", self.collector)
         self.pickup_guard = JamGuard("ball pickup", self.collector)
+        self.reverse_guard = JamGuard("reverse", self.collector)
         # MANUAL: every encoder, velocity and digital read in a loop comes from
         # one bulk read per hub, cleared at the top of the loop. Without it
         # each read is its own full bulk command. The SDK sets it back to OFF
@@ -287,10 +299,12 @@ class Main(LinearOpMode):
         # against the buttons' debounce.
         self.mag_button = Cycle(3)
         self.pickup_button = Cycle(2)
+        self.reverse_button = Cycle(2)
         self.pad = self.gamepad1
         self.manual = False
         self.in_use = "Free"
         self.mag_status = "off"
+        self.reverse_status = "off"
         self.fly_velocity = 0.0
         self.fly_ready = False
         self.prime_velocity = 0.0
@@ -337,6 +351,7 @@ class Main(LinearOpMode):
             self.update_buttons(now)
             self.update_mag_dump(now)
             self.update_ball_pickup()
+            self.update_reverse(now)
             if now - self.telemetry_ms >= self.TELEMETRY_EVERY_MS:
                 self.telemetry_ms = now
                 self.show_status()
@@ -357,6 +372,7 @@ class Main(LinearOpMode):
         self.gamepad2.resetEdgeDetection()
         self.mag_button.was_down = True
         self.pickup_button.was_down = True
+        self.reverse_button.was_down = True
         self.gamepad2.rumbleBlips(2)
 
     def touched(self, g: Gamepad) -> bool:
@@ -404,10 +420,20 @@ class Main(LinearOpMode):
         # spinning up by itself the moment BallPickup was switched off.
         mag = self.mag_button.pressed(self.pad.cross, now)
         pickup = self.pickup_button.pressed(self.pad.circle, now)
+        reverse = self.reverse_button.pressed(self.pad.triangle, now)
         if self.climb_mode:
             return
+        if reverse:
+            # Phase 0 makes the running mode switch itself off this loop, and
+            # update_reverse (called after both) then takes the Collector.
+            if self.in_use == "MagDump":
+                self.mag_button.phase = 0
+            elif self.in_use == "BallPickup":
+                self.pickup_button.phase = 0
+            self.reverse_button.advance()
+            return
         if mag:
-            if self.in_use == "BallPickup":
+            if self.in_use == "BallPickup" or self.in_use == "Reverse":
                 self.pad.rumble(150)
             else:
                 self.mag_button.advance()
@@ -415,6 +441,9 @@ class Main(LinearOpMode):
             if self.in_use == "MagDump":
                 # Cancel: phase 0 makes update_mag_dump switch it off this loop.
                 self.mag_button.phase = 0
+                self.pad.rumbleBlips(2)
+            elif self.in_use == "Reverse":
+                self.reverse_button.phase = 0
                 self.pad.rumbleBlips(2)
             else:
                 self.pickup_button.advance()
@@ -532,15 +561,48 @@ class Main(LinearOpMode):
             if self.pickup_guard.just_faulted():
                 self.pad.rumbleBlips(3)
 
+    # ------------------------------------------------------------------ reverse
+
+    def update_reverse(self, now: float) -> None:
+        phase = self.reverse_button.phase
+        if phase == 1 and self.in_use == "Free":
+            # The clutch goes on only once the Collector has stopped, as in
+            # MagDump: BRAKE so a Collector coming from the pickup stops fast.
+            self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
+            self.collector_still_ms = -1.0
+            self.reverse_guard.rearm()
+            self.in_use = "Reverse"
+        elif phase == 0 and self.in_use == "Reverse":
+            self.reverse_guard.update(0.0)
+            self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT)
+            self.set_clutch(False)
+            self.in_use = "Free"
+            self.reverse_status = "off"
+        if self.in_use != "Reverse":
+            return
+        self.update_clutch(now)
+        power = 0.0
+        if not self.clutch_deployed:
+            self.reverse_status = f"waiting for the Collector to stop ({self.collector_tps:.0f} t/s)"
+        elif now < self.clutch_ready_ms:
+            self.reverse_status = "clutch deploying"
+        else:
+            power = -self.REVERSE_POWER
+            self.reverse_status = "running"
+        self.reverse_guard.update(power)
+        if self.reverse_guard.just_faulted():
+            self.pad.rumbleBlips(3)
+
     # ------------------------------------------------------------------ climbing mode
 
     def update_climbing(self, now: float) -> None:
         if self.press_share:
             self.climb_mode = not self.climb_mode
             if self.climb_mode:
-                # Phase 0 makes MagDump/BallPickup switch themselves off this loop.
+                # Phase 0 makes MagDump/BallPickup/Reverse switch themselves off this loop.
                 self.mag_button.phase = 0
                 self.pickup_button.phase = 0
+                self.reverse_button.phase = 0
                 self.reset_climber_watch()
                 self.pad.rumbleBlips(1)
             else:
@@ -679,7 +741,12 @@ class Main(LinearOpMode):
                 self.telemetry.addLine(f"!! No '{self.CLUTCH_NAME}' servo: nothing reaches the shooter")
         if self.in_use == "BallPickup":
             self.telemetry.addData("Ball pickup", self.pickup_guard.status())
-        if self.feed_guard.is_faulted() or self.pickup_guard.is_faulted():
+        if self.in_use == "Reverse":
+            self.telemetry.addData("Reverse", self.reverse_status)
+            self.telemetry.addData("Collector", self.reverse_guard.status())
+            if self.clutch is None:
+                self.telemetry.addLine(f"!! No '{self.CLUTCH_NAME}' servo: only the Collector runs backwards")
+        if self.feed_guard.is_faulted() or self.pickup_guard.is_faulted() or self.reverse_guard.is_faulted():
             self.telemetry.addLine("!! Collector JAMMED - clear by hand, then press its button to turn it off and on")
         if self.climb_mode:
             self.telemetry.addLine("CLIMBING MODE (share to leave): shooter and pickup off")
