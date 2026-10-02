@@ -52,8 +52,10 @@ and encoder speed, and how many degrees the robot turned during the move.
 
 The Collector motor does both jobs and always spins the same way (REVERSE,
 the pickup direction). A servo named `clutch` couples it to the shooter
-intake: Main deploys it (position 0) when cross starts MagDump, before the
-Collector is driven, and pulls it back (`Main.CLUTCH_RETRACTED`, 1.0 for now,
+intake. When cross starts MagDump, Main sets the Collector to BRAKE and
+deploys the clutch (position 0) only once the Collector has stopped turning
+(under `CLUTCH_STOPPED_TPS` for `CLUTCH_STILL_MS`); feeding waits another
+`CLUTCH_MOVE_MS` for the servo, manual mode included. It pulls the clutch back (`Main.CLUTCH_RETRACTED`, 1.0 for now,
 not yet checked on the robot) when MagDump stops, on START, and on entering
 climbing mode. Ball pickup runs with the clutch out. Without a `clutch` in
 the hub configuration Main still runs and says on telemetry that the shooter

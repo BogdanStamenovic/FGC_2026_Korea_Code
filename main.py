@@ -11,8 +11,9 @@ Controls, on gamepad 1:
   circle              BallPickup on/off
                       (MagDump and BallPickup share the Collector motor, which
                       always spins the pickup way; MagDump deploys the "clutch"
-                      servo so the same motion also feeds the shooter. While
-                      one is on, the other's button only rumbles)
+                      servo so the same motion also feeds the shooter, but only
+                      once the Collector has stopped turning. While one is on,
+                      the other's button only rumbles)
   share               climbing mode on/off (1 rumble = on, 2 = off)
 
 In climbing mode, driving works the same, the shooter and pickup are off
@@ -131,6 +132,15 @@ class Main(LinearOpMode):
     CLUTCH_NAME: str = "clutch"
     CLUTCH_DEPLOYED: float = 0.0
     CLUTCH_RETRACTED: float = 1.0
+    # The clutch only deploys onto a stopped Collector: slower than
+    # CLUTCH_STOPPED_TPS (encoder ticks/s) for CLUTCH_STILL_MS in a row, so
+    # one slow reading while it coasts through a bounce does not count.
+    # Feeding waits a further CLUTCH_MOVE_MS for the servo to get there (a
+    # guess, like the retracted position). With no encoder cable the speed
+    # reads 0, and the clutch deploys after CLUTCH_STILL_MS regardless.
+    CLUTCH_STOPPED_TPS: float = 20.0
+    CLUTCH_STILL_MS: float = 100.0
+    CLUTCH_MOVE_MS: float = 400.0
     FIXATOR_POWER: float = 1.0
     FIXATOR_MS: float = 1000.0
     # The power that moves each climbing part up (flip a sign if one runs
@@ -177,6 +187,12 @@ class Main(LinearOpMode):
     second_climb: CRServo
     # None if "clutch" is not in the hub configuration.
     clutch: Servo
+    clutch_deployed: bool
+    # When the deployed clutch is in place and feeding may start.
+    clutch_ready_ms: float
+    # Since when the Collector has been stopped, or -1 while it turns.
+    collector_still_ms: float
+    collector_tps: float
     climb_mode: bool
     climber_sticks: bool
     brake_engaged: bool
@@ -279,6 +295,10 @@ class Main(LinearOpMode):
         self.prime_velocity = 0.0
         self.entered_fishing = False
         self.fixator_until_ms = 0.0
+        self.clutch_deployed = False
+        self.clutch_ready_ms = 0.0
+        self.collector_still_ms = -1.0
+        self.collector_tps = 0.0
         self.climb_mode = False
         self.climber_sticks = False
         self.brake_engaged = False
@@ -401,12 +421,10 @@ class Main(LinearOpMode):
     def update_mag_dump(self, now: float) -> None:
         phase = self.mag_button.phase
         if phase == 1 and self.in_use == "Free":
-            # Deployed for the whole MagDump, from spin-up on, while the
-            # Collector is not being driven: the >= FLY_RAMP_MS spin-up (or, in
-            # manual mode, the second press) gives the servo time to get there
-            # before the Collector feeds.
-            self.set_clutch(True)
+            # BRAKE so a Collector still coasting from the pickup stops
+            # quickly; the clutch waits for it in update_clutch.
             self.collector.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE)
+            self.collector_still_ms = -1.0
             self.feed_guard.rearm()
             self.fly_ready = False
             self.fly_start_ms = now
@@ -431,9 +449,14 @@ class Main(LinearOpMode):
         self.shooter.setPower(self.FLYWHEEL_POWER * step / self.FLY_RAMP_STEPS)
         self.fly_velocity = abs(self.shooter.getVelocity())
         self.track_flywheel(now)
+        self.update_clutch(now)
         feed = 0.0
         if phase < 2:
             self.mag_status = "flywheel ready" if self.fly_ready else "spinning up"
+        elif not self.clutch_deployed:
+            self.mag_status = f"shoot pressed, waiting for the intake to stop ({self.collector_tps:.0f} t/s)"
+        elif now < self.clutch_ready_ms:
+            self.mag_status = "shoot pressed, clutch deploying"
         elif self.manual:
             feed = self.FEED_POWER
             self.mag_status = "shooting (manual)"
@@ -467,7 +490,26 @@ class Main(LinearOpMode):
         self.fly_ref_velocity = self.fly_velocity
         self.fly_ref_ms = now
 
+    def update_clutch(self, now: float) -> None:
+        """Deploy the clutch once the Collector has stopped. Until then
+        update_mag_dump feeds 0, so the Collector is not driven meanwhile.
+        In manual mode too: this protects the clutch, it is not automation."""
+        if self.clutch_deployed:
+            return
+        # Same Expansion Hub as the shooter, so this comes from the bulk read
+        # already made for the flywheel: no extra hub command.
+        self.collector_tps = abs(self.collector.getVelocity())
+        if self.collector_tps >= self.CLUTCH_STOPPED_TPS:
+            self.collector_still_ms = -1.0
+            return
+        if self.collector_still_ms < 0:
+            self.collector_still_ms = now
+        if now - self.collector_still_ms >= self.CLUTCH_STILL_MS:
+            self.set_clutch(True)
+            self.clutch_ready_ms = now + self.CLUTCH_MOVE_MS
+
     def set_clutch(self, deployed: bool) -> None:
+        self.clutch_deployed = deployed
         if self.clutch is None:
             return
         self.clutch.setPosition(self.CLUTCH_DEPLOYED if deployed else self.CLUTCH_RETRACTED)
