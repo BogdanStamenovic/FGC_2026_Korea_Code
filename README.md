@@ -10,8 +10,8 @@ Hardware configuration on the hub: `FGC2026-Incheon`.
 | `drive.py` | `OmniDrive`: X-drive mix, calibrated corrections, heading hold, odometry, `drive_cm` / `turn_to` for autonomous. |
 | `drive_cal.py` | `DriveCal`: the saved numbers, `/sdcard/FIRST/settings/omni_calibration.txt`. |
 | `jam.py` | `JamGuard`: detects a stuck intake, backs it out, gives up after 4 tries in 3 s. |
-| `drive_test.py` | TeleOp **Drive Test**: drives one pure direction at a time (hold dpad / bumpers) to check the drive mix. |
-| `aftercare.py` | Empty after-match OpMode. |
+| `testing.py` | TeleOp **Testing** (was Drive Test): a DRIVE page that drives one pure direction at a time, and a PARTS page that runs every other motor and servo by hand. |
+| `aftercare.py` | TeleOp **aftercare**: puts the climbing parts back by hand after a match (controls at the top of the file). |
 
 ## Calibrating the drive
 
@@ -39,8 +39,8 @@ wrong guess would make heading hold spin the robot.
 
 ## Checking drive directions
 
-Run **Drive Test** with the robot on the floor. It only moves while a button
-is held: dpad up/down = forward/backward, dpad right/left = strafe right/left,
+Run **Testing** with the robot on the floor; it starts on the DRIVE page.
+It only moves while a button is held: dpad up/down = forward/backward, dpad right/left = strafe right/left,
 bumpers = turn right/left, triangle/cross = power up/down (starts at 0.4),
 square switches between RAW (the wheel mix and motor directions in
 `drive.py`, nothing else) and CALIBRATED (as Main drives, minus heading hold).
@@ -48,16 +48,32 @@ Wrong in RAW: the mix or a motor direction is wrong. Right in RAW but wrong
 in CALIBRATED: the calibration file is. Telemetry shows each wheel's power
 and encoder speed, and how many degrees the robot turned during the move.
 
+## Testing each part
+
+Share switches **Testing** to the PARTS page: dpad up/down picks a part
+(Collector, shooter, Climber, chain, ClimbUpper, SecondClimbUpper, fixator,
+ChainStop, chainDrop, clutch). Motors and continuous servos run while a
+bumper is held, each way named as Main uses it; triangle/cross change the
+power. Servos go to Main's two positions on the bumpers, and triangle/cross
+nudge them by 0.02 with the exact position on telemetry, for finding better
+values. Directions, run modes and positions are copies of `main.py`'s. The
+clutch refuses to deploy while the Collector turns, as in Main.
+
 ## Collector and the shooter clutch
 
 The Collector motor does both jobs and always spins the same way (REVERSE,
 the pickup direction). A servo named `clutch` couples it to the shooter
 intake. When cross starts MagDump, Main sets the Collector to BRAKE and
-deploys the clutch (position 0) only once the Collector has stopped turning
+deploys the clutch (`CLUTCH_DEPLOYED`, 0.9) only once the Collector has stopped turning
 (under `CLUTCH_STOPPED_TPS` for `CLUTCH_STILL_MS`); feeding waits another
-`CLUTCH_MOVE_MS` for the servo, manual mode included. It pulls the clutch back (`Main.CLUTCH_RETRACTED`, 1.0 for now,
-not yet checked on the robot) when MagDump stops, on START, and on entering
-climbing mode. Ball pickup runs with the clutch out. Without a `clutch` in
+`CLUTCH_MOVE_MS` for the servo, manual mode included. It pulls the clutch back (`CLUTCH_RETRACTED`, 0.74; both
+positions set on the robot 2 Oct) when MagDump stops, on START, and on
+entering climbing mode. Ball pickup runs with the clutch out.
+
+Triangle is **Reverse**: the Collector runs opposite to pickup with the
+clutch deployed (same wait for a stopped Collector), so the shooter intake
+runs backwards too; the flywheel stays off. Triangle again or circle stops
+it; triangle also takes over straight from MagDump or BallPickup. Without a `clutch` in
 the hub configuration Main still runs and says on telemetry that the shooter
 is not fed.
 

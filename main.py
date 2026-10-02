@@ -136,11 +136,11 @@ class Main(LinearOpMode):
     CHAIN_DROP_FISHING: float = 0.25
     CHAIN_STOP_START: float = 0.7
     CHAIN_STOP_ENGAGED: float = 0.4
-    # Clutch servo positions. 0 = deployed (Collector drives the shooter
-    # intake). The retracted end is a guess: check it on the robot.
+    # Clutch servo positions, set on the robot 2 Oct. Deployed = the Collector
+    # drives the shooter intake.
     CLUTCH_NAME: str = "clutch"
-    CLUTCH_DEPLOYED: float = 0.0
-    CLUTCH_RETRACTED: float = 1.0
+    CLUTCH_DEPLOYED: float = 0.9
+    CLUTCH_RETRACTED: float = 0.74
     # The clutch only deploys onto a stopped Collector: slower than
     # CLUTCH_STOPPED_TPS (encoder ticks/s) for CLUTCH_STILL_MS in a row, so
     # one slow reading while it coasts through a bounce does not count.
