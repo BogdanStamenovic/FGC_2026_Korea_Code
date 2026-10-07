@@ -10,6 +10,9 @@ full stick), so pushing the same way on both is no faster than one at full.
 
 Gamepad 1, the shooter and pickup:
   options             heading hold on/off (on at start; 1 rumble = on, 2 = off)
+  share               TEST: spin-up wait off/on (on at start; 1 rumble = off,
+                      2 = back on). Off, shoot feeds as soon as the clutch is
+                      in, whatever the flywheel speed.
   cross               MagDump: off -> spin up shooter -> shoot -> off
   circle              BallPickup on/off
                       (MagDump and BallPickup share the Collector motor, which
@@ -212,6 +215,9 @@ class Main(LinearOpMode):
     # This loop's button presses. Every *WasPressed() is read once per loop:
     # an unread press would otherwise wait and fire later.
     press_hold: bool
+    press_spinup: bool
+    # Shooter test: feed without waiting for the flywheel (share toggles it).
+    no_spinup_wait: bool
     press_fixator: bool
     press_brake: bool
     press_square: bool
@@ -305,6 +311,8 @@ class Main(LinearOpMode):
         self.brake_engaged = False
         self.reset_climber_watch()
         self.press_hold = False
+        self.press_spinup = False
+        self.no_spinup_wait = False
         self.press_fixator = False
         self.press_brake = False
         self.press_square = False
@@ -347,6 +355,7 @@ class Main(LinearOpMode):
 
     def read_presses(self) -> None:
         self.press_hold = self.gamepad1.optionsWasPressed()
+        self.press_spinup = self.gamepad1.backWasPressed()
         self.press_fixator = self.gamepad2.optionsWasPressed()
         self.press_brake = self.gamepad2.crossWasPressed()
         self.press_square = self.gamepad2.squareWasPressed()
@@ -367,6 +376,9 @@ class Main(LinearOpMode):
     # ------------------------------------------------------------------ buttons
 
     def update_buttons(self, now: float) -> None:
+        if self.press_spinup:
+            self.no_spinup_wait = not self.no_spinup_wait
+            self.gamepad1.rumbleBlips(1 if self.no_spinup_wait else 2)
         mag = self.mag_button.pressed(self.gamepad1.cross, now)
         pickup = self.pickup_button.pressed(self.gamepad1.circle, now)
         reverse = self.reverse_button.pressed(self.gamepad1.triangle, now)
@@ -436,6 +448,10 @@ class Main(LinearOpMode):
             self.mag_status = f"shoot pressed, waiting for the intake to stop ({self.collector_tps:.0f} t/s)"
         elif now < self.clutch_ready_ms:
             self.mag_status = "shoot pressed, clutch deploying"
+        elif self.no_spinup_wait:
+            # The clutch wait above stays: it protects the clutch, not the shot.
+            feed = self.FEED_POWER
+            self.mag_status = "shooting (no spin-up wait)"
         elif not self.fly_ready:
             self.mag_status = "shoot pressed, waiting for flywheel"
         elif self.fly_velocity < self.prime_velocity * self.FEED_GATE:
@@ -654,6 +670,8 @@ class Main(LinearOpMode):
         self.telemetry.addData("Mode", self.in_use)
         if self.in_use == "MagDump":
             self.telemetry.addData("MagDump", self.mag_status)
+        if self.no_spinup_wait:
+            self.telemetry.addLine("TEST: spin-up wait OFF (share to restore)")
             self.telemetry.addData("Flywheel", f"{self.fly_velocity:.0f} t/s, prime {self.prime_velocity:.0f}")
             self.telemetry.addData("Shooter intake", self.feed_guard.status())
             if self.clutch is None:
