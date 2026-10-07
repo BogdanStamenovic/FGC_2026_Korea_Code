@@ -376,6 +376,19 @@ class OmniDrive:
         # the turn stick is inverted so pushing it right turns right.
         self.teleop(-gp.left_stick_y, gp.left_stick_x, -gp.right_stick_x)
 
+    def teleop_two_gamepads(self, a: Gamepad, b: Gamepad, b_drives: bool) -> None:
+        """Both drivers at once, same layout as teleop_gamepad: the sticks add
+        up, each axis capped at full stick. b_drives False leaves b out (its
+        stick is busy elsewhere) and a still drives."""
+        ly = a.left_stick_y
+        lx = a.left_stick_x
+        rx = a.right_stick_x
+        if b_drives:
+            ly = ly + b.left_stick_y
+            lx = lx + b.left_stick_x
+            rx = rx + b.right_stick_x
+        self.teleop(-Range.clip(ly, -1.0, 1.0), Range.clip(lx, -1.0, 1.0), -Range.clip(rx, -1.0, 1.0))
+
     # ------------------------------------------------------------------ autonomous
 
     def drive_cm(self, op: LinearOpMode, fwd_cm: float, left_cm: float, max_power: float, timeout_s: float) -> bool:
