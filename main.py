@@ -27,8 +27,8 @@ Gamepad 1, the shooter and pickup:
                       circle cancels it and cross only rumbles
 
 Gamepad 2, climbing (always live, there is no climbing mode to enter):
-  left trigger / left bumper     ClimbUpper up / down
-  right trigger / right bumper   SecondClimbUpper up / down
+  right trigger / right bumper   ClimbUpper up / down
+  left trigger / left bumper     SecondClimbUpper up / down
                                  (triggers as far as pressed, bumpers full power)
   options             fixator release, 1 s per press, as often as needed
   dpad down / up      chain down / up (the first dpad down also drops the chain)
@@ -313,7 +313,7 @@ class Main(LinearOpMode):
         self.telemetry.addLine("Ready. Press START.")
         self.telemetry.addLine(self.calibration_line())
         if self.second_climb is None:
-            self.telemetry.addLine(f"No '{self.SECOND_CLIMB_NAME}' in the configuration: right bumper/trigger do nothing")
+            self.telemetry.addLine(f"No '{self.SECOND_CLIMB_NAME}' in the configuration: left bumper/trigger do nothing")
         if self.clutch is None:
             self.telemetry.addLine(f"!! No '{self.CLUTCH_NAME}' servo in the configuration: the shooter will not be fed")
         self.telemetry.update()
@@ -551,9 +551,9 @@ class Main(LinearOpMode):
         if self.press_fixator:
             self.fixator_until_ms = now + self.FIXATOR_MS
             self.fixator_release.setPower(self.FIXATOR_POWER)
-        self.climb_upper.setPower(self.climb_power(g.left_trigger, g.left_bumper, self.CLIMB_POWER))
+        self.climb_upper.setPower(self.climb_power(g.right_trigger, g.right_bumper, self.CLIMB_POWER))
         if self.second_climb is not None:
-            self.second_climb.setPower(self.climb_power(g.right_trigger, g.right_bumper, self.SECOND_CLIMB_POWER))
+            self.second_climb.setPower(self.climb_power(g.left_trigger, g.left_bumper, self.SECOND_CLIMB_POWER))
         if g.dpad_down:
             self.chain_drop.setPosition(self.CHAIN_DROP_FISHING)
             self.entered_fishing = True

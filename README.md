@@ -66,9 +66,8 @@ the pickup direction). A servo named `clutch` couples it to the shooter
 intake. When cross starts MagDump, Main sets the Collector to BRAKE and
 deploys the clutch (`CLUTCH_DEPLOYED`, 0.9) only once the Collector has stopped turning
 (under `CLUTCH_STOPPED_TPS` for `CLUTCH_STILL_MS`); feeding waits another
-`CLUTCH_MOVE_MS` for the servo, manual mode included. It pulls the clutch back (`CLUTCH_RETRACTED`, 0.74; both
-positions set on the robot 2 Oct) when MagDump stops, on START, and on
-entering climbing mode. Ball pickup runs with the clutch out.
+`CLUTCH_MOVE_MS` for the servo. It pulls the clutch back (`CLUTCH_RETRACTED`, 0.74; both
+positions set on the robot 2 Oct) when MagDump stops, and on START. Ball pickup runs with the clutch out.
 
 Triangle is **Reverse**: the Collector runs opposite to pickup with the
 clutch deployed (same wait for a stopped Collector), so the shooter intake
@@ -77,20 +76,19 @@ it; triangle also takes over straight from MagDump or BallPickup. Without a `clu
 the hub configuration Main still runs and says on telemetry that the shooter
 is not fed.
 
-## Controls, climbing mode and manual mode
+## Controls
 
-The full list is at the top of `main.py`. Share switches climbing mode on
-and off. In it, driving works as usual, the shooter and pickup are off, and:
-bumpers raise and triggers lower ClimbUpper (left) and SecondClimbUpper
-(right, configured as a CR servo named `SecondClimbUpper`), options runs the
-fixator release for 1 s per press, dpad down/up move the chain (the first
-dpad down also drops it), cross engages/releases the chain brake, and square
-hands the left stick to the Climber motor instead of the drive. None of it
-exists outside climbing mode.
-
-The first touch on gamepad 2 switches to manual mode for the rest of the
-match: gamepad 2 takes over with the same layout and gamepad 1 is ignored.
-Nothing is automatic then except the collector's unjamming.
+The full list is at the top of `main.py`. Two drivers share the robot: both
+gamepads drive at once (their sticks add up, each axis capped at full stick).
+Gamepad 1 runs the shooter and pickup; gamepad 2 climbs, and its climbing
+controls are always live, with no mode to enter:
+triggers raise (as far as pressed) and bumpers lower (full power) ClimbUpper
+(right) and SecondClimbUpper (left, configured as a CR servo named
+`SecondClimbUpper`), options runs the fixator release for 1 s per press, dpad
+down/up move the chain (the first dpad down also drops it), cross
+engages/releases the chain brake, and square hands gamepad 2's left stick to
+the Climber motor instead of the drive (gamepad 1 still drives). Climbing
+does not stop the shooter or pickup.
 
 ## Loop speed
 
