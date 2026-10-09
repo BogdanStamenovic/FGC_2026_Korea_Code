@@ -6,6 +6,7 @@ Hardware configuration on the hub: `FGC2026-Incheon`.
 | file | what |
 |---|---|
 | `main.py` | TeleOp **Main**. Controls are listed at the top of the file. |
+| `nocab.py` | TeleOp **nocab**: Main with the drive calibration off (file not read, raw wheel mix, no heading hold). Everything else is Main. |
 | `calibration.py` | TeleOp **Calibration**: measures the drivetrain once, saves it on the hub. |
 | `drive.py` | `OmniDrive`: X-drive mix, calibrated corrections, heading hold, odometry, `drive_cm` / `turn_to` for autonomous. |
 | `drive_cal.py` | `DriveCal`: the saved numbers, `/sdcard/FIRST/settings/omni_calibration.txt`. |

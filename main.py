@@ -241,8 +241,10 @@ class Main(LinearOpMode):
         self.climb_upper = self.hardwareMap.get(CRServo, "ClimbUpper")
         # ── pyftc:init:end ──
         self.cal = DriveCal()
-        self.cal.load()
+        if self.use_calibration():
+            self.cal.load()
         self.drive = OmniDrive(self.hardwareMap, self.cal)
+        self.drive.use_corrections = self.use_calibration()
         self.drive.init_imu()
         # The direction never changes now: both jobs spin the Collector the
         # pickup way, the clutch decides whether the shooter intake turns too.
@@ -344,6 +346,12 @@ class Main(LinearOpMode):
         self.drive.stop()
 
     # ------------------------------------------------------------------ drive
+
+    def use_calibration(self) -> bool:
+        """NoCab (nocab.py) returns False. A method and not a class constant:
+        this is Java underneath, where a subclass's field only hides Main's
+        and Main's own code would still read Main's value."""
+        return True
 
     def read_presses(self) -> None:
         self.press_hold = self.gamepad1.optionsWasPressed()
@@ -633,6 +641,8 @@ class Main(LinearOpMode):
                 self.volts_low = min(self.volts_low, v)
 
     def calibration_line(self) -> str:
+        if not self.use_calibration():
+            return "Drive: calibration OFF (nocab): raw wheel mix, no heading hold"
         if self.cal.load_error != "":
             return "Drive: " + self.cal.load_error
         if not self.cal.loaded:
@@ -641,7 +651,9 @@ class Main(LinearOpMode):
 
     def show_status(self) -> None:
         hold = "ON" if self.drive.hold_enabled else "off"
-        if not self.cal.has("ramp"):
+        if not self.use_calibration():
+            hold = "off (nocab)"
+        elif not self.cal.has("ramp"):
             hold = "unavailable until Calibration step 5"
         self.telemetry.addLine(self.calibration_line())
         self.telemetry.addData("Heading", f"{self.drive.heading():.1f} deg, hold {hold}")
